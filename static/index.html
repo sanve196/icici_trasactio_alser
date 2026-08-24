@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Transaction Analyser</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0D1420;
+    --panel:#16202F;
+    --panel-2:#1C2838;
+    --paper:#E9E4D8;
+    --brass:#C9A227;
+    --credit:#4E9E8E;
+    --debit:#B3543A;
+    --muted:#7C8798;
+    --line:#2A3849;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--ink);
+    color:var(--paper);
+    font-family:'Inter',sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding:28px 20px 60px;
+    min-height:100vh;
+  }
+  .wrap{max-width:1180px;margin:0 auto;}
+
+  .masthead{border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:22px;}
+  .eyebrow{
+    font-family:'IBM Plex Mono',monospace;
+    letter-spacing:.18em;
+    text-transform:uppercase;
+    font-size:11px;
+    color:var(--brass);
+    margin-bottom:8px;
+  }
+  h1{
+    font-family:'Fraunces',serif;
+    font-weight:600;
+    font-size:clamp(26px,4vw,38px);
+    margin:0 0 6px;
+    letter-spacing:-.01em;
+  }
+  .sub{
+    font-family:'IBM Plex Mono',monospace;
+    color:var(--muted);
+    font-size:13px;
+    display:flex;
+    gap:18px;
+    flex-wrap:wrap;
+  }
+  .sub b{color:var(--paper);font-weight:500;}
+
+  /* Upload panel */
+  .upload-panel{
+    background:var(--panel);
+    border:1px dashed var(--line);
+    border-radius:6px;
+    padding:36px 24px;
+    text-align:center;
+    margin-bottom:26px;
+  }
+  .upload-panel.drag{border-color:var(--brass);background:var(--panel-2);}
+  .upload-panel p{color:var(--muted);font-size:13px;margin:6px 0 18px;}
+  .upload-btn{
+    display:inline-block;
+    background:var(--brass);
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    font-weight:600;
+    font-size:13px;
+    padding:10px 20px;
+    border-radius:4px;
+    cursor:pointer;
+    border:none;
+  }
+  .upload-btn:hover{opacity:.9;}
+  #fileInput{display:none;}
+  .file-hint{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11px;
+    color:var(--muted);
+    margin-top:14px;
+  }
+  .error-box{
+    background:#2A1414;
+    border:1px solid var(--debit);
+    color:#F0C9BE;
+    padding:12px 16px;
+    border-radius:4px;
+    font-size:13px;
+    margin-bottom:20px;
+    display:none;
+  }
+  .loading{
+    text-align:center;
+    color:var(--muted);
+    font-family:'IBM Plex Mono',monospace;
+    padding:30px;
+    display:none;
+  }
+
+  .app-body{display:none;}
+
+  .stats{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:1px;
+    background:var(--line);
+    border:1px solid var(--line);
+    margin-bottom:26px;
+  }
+  .stat{background:var(--panel);padding:16px 18px;}
+  .stat .label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:8px;}
+  .stat .value{font-family:'IBM Plex Mono',monospace;font-size:19px;font-weight:600;color:var(--paper);}
+  .stat .value.in{color:var(--credit);}
+  .stat .value.out{color:var(--debit);}
+  .stat .value.net.pos{color:var(--credit);}
+  .stat .value.net.neg{color:var(--debit);}
+
+  .tabs{display:flex;gap:2px;margin-bottom:16px;border-bottom:1px solid var(--line);flex-wrap:wrap;}
+  .tab{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:12.5px;letter-spacing:.03em;text-transform:uppercase;
+    background:transparent;border:none;color:var(--muted);
+    padding:10px 16px;cursor:pointer;border-bottom:2px solid transparent;
+    transition:color .15s, border-color .15s;
+  }
+  .tab:hover{color:var(--paper);}
+  .tab.active{color:var(--brass);border-bottom-color:var(--brass);}
+
+  .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;}
+  input[type=text], select{
+    background:var(--panel);border:1px solid var(--line);color:var(--paper);
+    font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border-radius:3px;
+  }
+  input[type=text]::placeholder{color:var(--muted);}
+  input:focus, select:focus{outline:1px solid var(--brass);}
+  .search{flex:1;min-width:200px;}
+  .count-note{font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--muted);margin-left:auto;}
+
+  table{width:100%;border-collapse:collapse;}
+  thead th{
+    text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--muted);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--line);
+    cursor:pointer;user-select:none;white-space:nowrap;
+  }
+  thead th:hover{color:var(--paper);}
+  thead th.sorted{color:var(--brass);}
+  tbody tr{border-bottom:1px solid var(--line);cursor:pointer;}
+  tbody tr:hover{background:var(--panel);}
+  tbody td{padding:9px 10px;font-size:13.5px;vertical-align:middle;}
+  td.name{max-width:260px;}
+  td.mono, th.mono{font-family:'IBM Plex Mono',monospace;}
+  td.amt{text-align:right;font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;white-space:nowrap;position:relative;}
+  td.amt.in{color:var(--credit);}
+  td.amt.out{color:var(--debit);}
+  .bar{position:absolute;left:0;bottom:3px;height:3px;background:var(--brass);opacity:.55;border-radius:2px;}
+  .bar.in{background:var(--credit);}
+  .bar.out{background:var(--debit);}
+  .tag{
+    font-family:'IBM Plex Mono',monospace;font-size:10.5px;padding:2px 7px;border-radius:3px;
+    border:1px solid var(--line);color:var(--muted);white-space:nowrap;
+  }
+  .tag.IN{color:var(--credit);border-color:var(--credit);}
+  .tag.OUT{color:var(--debit);border-color:var(--debit);}
+
+  .drill{background:var(--panel-2);}
+  .drill td{padding:0;}
+  .drill-inner{padding:10px 10px 14px 30px;}
+  .drill-inner table{width:100%;}
+  .drill-inner th{font-size:10px;padding:5px 8px;}
+  .drill-inner td{font-size:12.5px;padding:5px 8px;color:var(--muted);}
+  .drill-inner td.amt{color:var(--paper);}
+
+  .pager{display:flex;gap:8px;justify-content:center;align-items:center;margin-top:16px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted);}
+  .pager button{background:var(--panel);border:1px solid var(--line);color:var(--paper);padding:6px 12px;border-radius:3px;cursor:pointer;font-family:inherit;font-size:12px;}
+  .pager button:disabled{opacity:.35;cursor:default;}
+
+  .empty{text-align:center;color:var(--muted);padding:40px 0;font-family:'IBM Plex Mono',monospace;font-size:13px;}
+
+  .note{
+    font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);
+    margin-top:22px;line-height:1.6;border-top:1px solid var(--line);padding-top:14px;
+  }
+  .reset-link{
+    font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--brass);
+    cursor:pointer;text-decoration:underline;background:none;border:none;padding:0;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="masthead">
+    <div class="eyebrow">Transaction Analyser</div>
+    <h1>Who paid whom, and how much</h1>
+    <div class="sub">
+      <span>Upload an ICICI Statement of Account (.xlsx) to get a payer/payee breakdown</span>
+    </div>
+  </div>
+
+  <div class="upload-panel" id="uploadPanel">
+    <p>Drop your bank statement export here, or choose a file.<br>The file is parsed in this browser session only and is not stored anywhere.</p>
+    <label class="upload-btn" for="fileInput">Choose .xlsx file</label>
+    <input type="file" id="fileInput" accept=".xlsx" />
+    <div class="file-hint">Expected columns: Ac_No, AC_Name, Tran_ID, Tran_Date, Inst_Type, Inst_Num, Dr_Amt, Cr_Amt, Balance, Narration, pstd_dt</div>
+  </div>
+
+  <div class="error-box" id="errorBox"></div>
+  <div class="loading" id="loadingBox">Parsing statement…</div>
+
+  <div class="app-body" id="appBody">
+    <div class="stats" id="statStrip"></div>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="in">Payers — Money In</button>
+      <button class="tab" data-tab="out">Payees — Money Out</button>
+      <button class="tab" data-tab="all">All Transactions</button>
+    </div>
+
+    <div class="controls">
+      <input class="search" type="text" id="searchBox" placeholder="Search counterparty…" />
+      <select id="catFilter" style="display:none"><option value="">All categories</option></select>
+      <span class="count-note" id="countNote"></span>
+    </div>
+
+    <div id="tableHost"></div>
+    <div class="pager" id="pager" style="display:none"></div>
+
+    <div class="note">
+      Counterparty names are parsed from the bank's free-text narration field, which ICICI truncates to 50 characters —
+      some names are cut short and may represent the same real entity under slightly different labels.
+      "Payers"/"Payees" views exclude bank charges, cheque returns and unnamed cash deposits. Click any row to see its underlying transactions.
+      <br><br><button class="reset-link" id="resetBtn">Analyse a different file</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const fileInput = document.getElementById('fileInput');
+const uploadPanel = document.getElementById('uploadPanel');
+const errorBox = document.getElementById('errorBox');
+const loadingBox = document.getElementById('loadingBox');
+const appBody = document.getElementById('appBody');
+
+['dragover','dragenter'].forEach(evt => uploadPanel.addEventListener(evt, e=>{
+  e.preventDefault(); uploadPanel.classList.add('drag');
+}));
+['dragleave','drop'].forEach(evt => uploadPanel.addEventListener(evt, e=>{
+  e.preventDefault(); uploadPanel.classList.remove('drag');
+}));
+uploadPanel.addEventListener('drop', e=>{
+  const f = e.dataTransfer.files[0];
+  if(f) handleFile(f);
+});
+fileInput.addEventListener('change', e=>{
+  const f = e.target.files[0];
+  if(f) handleFile(f);
+});
+document.getElementById('resetBtn').addEventListener('click', ()=>{
+  appBody.style.display = 'none';
+  uploadPanel.style.display = 'block';
+  errorBox.style.display = 'none';
+  fileInput.value = '';
+});
+
+function showError(msg){
+  errorBox.textContent = msg;
+  errorBox.style.display = 'block';
+  loadingBox.style.display = 'none';
+}
+
+async function handleFile(file){
+  errorBox.style.display = 'none';
+  loadingBox.style.display = 'block';
+  uploadPanel.style.display = 'none';
+  appBody.style.display = 'none';
+
+  const form = new FormData();
+  form.append('file', file);
+
+  try{
+    const res = await fetch('/api/analyze', { method:'POST', body: form });
+    const data = await res.json();
+    if(!res.ok){
+      showError(data.error || 'Something went wrong while parsing this file.');
+      uploadPanel.style.display = 'block';
+      return;
+    }
+    loadingBox.style.display = 'none';
+    appBody.style.display = 'block';
+    initApp(data.transactions, data.summary);
+  }catch(err){
+    showError('Could not reach the server. Please try again.');
+    uploadPanel.style.display = 'block';
+  }
+}
+
+// ---- app logic (operates on data returned by the API) ----
+let txns = [];
+let aggIn = [];
+let aggOut = [];
+let MAXAGG = 1;
+let state = { tab:'in', search:'', category:'', sortKey:'total', sortDir:-1, page:1, pageSize:50, openRow:null };
+
+function fmtAmt(n){
+  if(n===null||n===undefined) return '—';
+  return '₹' + Math.round(n).toLocaleString('en-IN');
+}
+function fmtDate(iso){
+  if(!iso) return '—';
+  const d = new Date(iso+'T00:00:00');
+  return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+}
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function initApp(transactions, summary){
+  txns = transactions.map(t => ({...t, amount: t.direction==='IN' ? t.cr : t.dr}));
+  aggIn = summary.payers;
+  aggOut = summary.payees;
+  MAXAGG = Math.max(1, ...aggIn.map(a=>a.total), ...aggOut.map(a=>a.total));
+
+  const stats = [
+    {label:'Total Money In', value: fmtAmt(summary.total_in), cls:'in'},
+    {label:'Total Money Out', value: fmtAmt(summary.total_out), cls:'out'},
+    {label:'Net Movement', value: fmtAmt(summary.net), cls:'net ' + (summary.net>=0?'pos':'neg')},
+    {label:'Unique Payers', value: aggIn.length.toLocaleString('en-IN'), cls:''},
+    {label:'Unique Payees', value: aggOut.length.toLocaleString('en-IN'), cls:''},
+  ];
+  document.getElementById('statStrip').innerHTML = stats.map(s=>
+    `<div class="stat"><div class="label">${s.label}</div><div class="value ${s.cls}">${s.value}</div></div>`
+  ).join('');
+
+  const cats = Array.from(new Set(txns.map(t=>t.category))).sort();
+  const catSel = document.getElementById('catFilter');
+  catSel.innerHTML = '<option value="">All categories</option>';
+  cats.forEach(c=>{
+    const o = document.createElement('option'); o.value=c; o.textContent=c; catSel.appendChild(o);
+  });
+
+  state = { tab:'in', search:'', category:'', sortKey:'total', sortDir:-1, page:1, pageSize:50, openRow:null };
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab==='in'));
+  document.getElementById('searchBox').value = '';
+  render();
+}
+
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');
+  state.tab = t.dataset.tab;
+  state.page = 1; state.openRow = null;
+  state.sortKey = state.tab==='all' ? 'date' : 'total';
+  state.sortDir = -1;
+  document.getElementById('searchBox').placeholder = state.tab==='all' ? 'Search counterparty or category…' : 'Search counterparty…';
+  render();
+}));
+
+document.getElementById('searchBox').addEventListener('input', e=>{ state.search = e.target.value.toLowerCase(); state.page=1; render(); });
+document.getElementById('catFilter').addEventListener('change', e=>{ state.category = e.target.value; state.page=1; render(); });
+
+function renderAggTable(list, direction){
+  let filtered = list.filter(r => r.name.toLowerCase().includes(state.search));
+  const keyMap = {total:'total', count:'count', name:'name', first:'first', last:'last'};
+  const k = keyMap[state.sortKey] || 'total';
+  filtered.sort((a,b)=>{
+    let av=a[k], bv=b[k];
+    if(typeof av==='string') return state.sortDir===1 ? av.localeCompare(bv) : bv.localeCompare(av);
+    return state.sortDir===1 ? av-bv : bv-av;
+  });
+
+  document.getElementById('countNote').textContent = `${filtered.length.toLocaleString('en-IN')} counterparties`;
+
+  const start = (state.page-1)*state.pageSize;
+  const pageRows = filtered.slice(start, start+state.pageSize);
+
+  if(pageRows.length===0){
+    document.getElementById('tableHost').innerHTML = `<div class="empty">No counterparties match "${escapeHtml(state.search)}".</div>`;
+    document.getElementById('pager').style.display='none';
+    return;
+  }
+
+  const cls = direction==='IN' ? 'in' : 'out';
+  let html = `<table><thead><tr>
+    <th data-k="name">Counterparty</th>
+    <th data-k="count" class="mono">Txns</th>
+    <th data-k="first" class="mono">First</th>
+    <th data-k="last" class="mono">Last</th>
+    <th data-k="total" class="mono" style="text-align:right">Amount</th>
+  </tr></thead><tbody>`;
+  pageRows.forEach(r=>{
+    const pct = (r.total/MAXAGG*100).toFixed(1);
+    html += `<tr class="agg-row" data-name="${encodeURIComponent(r.name)}" data-dir="${direction}">
+      <td class="name">${escapeHtml(r.name)}</td>
+      <td class="mono">${r.count}</td>
+      <td class="mono">${fmtDate(r.first)}</td>
+      <td class="mono">${fmtDate(r.last)}</td>
+      <td class="amt ${cls}">${fmtAmt(r.total)}<div class="bar ${cls}" style="width:${pct}%"></div></td>
+    </tr>`;
+    if(state.openRow === r.name+'|'+direction){
+      html += drillRow(r.name, direction);
+    }
+  });
+  html += '</tbody></table>';
+  document.getElementById('tableHost').innerHTML = html;
+  attachHeaderSort();
+  attachRowClicks();
+  renderPager(filtered.length);
+}
+
+function drillRow(name, direction){
+  const rows = txns.filter(t=>t.counterparty===name && t.direction===direction)
+                    .sort((a,b)=> (a.date||'')<(b.date||'')?1:-1);
+  let inner = `<table><thead><tr><th>Date</th><th>Category</th><th style="text-align:right">Amount</th><th>Balance after</th></tr></thead><tbody>`;
+  rows.forEach(t=>{
+    inner += `<tr><td>${fmtDate(t.date)}</td><td>${escapeHtml(t.category)}</td><td class="amt">${fmtAmt(t.amount)}</td><td>${fmtAmt(t.balance)}</td></tr>`;
+  });
+  inner += '</tbody></table>';
+  return `<tr class="drill"><td colspan="5"><div class="drill-inner">${inner}</div></td></tr>`;
+}
+
+function renderAllTable(){
+  let filtered = txns.filter(t=>{
+    if(state.category && t.category!==state.category) return false;
+    if(state.search){
+      const s = state.search;
+      if(!t.counterparty.toLowerCase().includes(s) && !t.category.toLowerCase().includes(s)) return false;
+    }
+    return true;
+  });
+  const keyMap = {date:'date', category:'category', counterparty:'counterparty', amount:'amount'};
+  const k = keyMap[state.sortKey] || 'date';
+  filtered.sort((a,b)=>{
+    let av=a[k]||'', bv=b[k]||'';
+    if(typeof av==='string') return state.sortDir===-1 ? bv.localeCompare(av) : av.localeCompare(bv);
+    return state.sortDir===-1 ? bv-av : av-bv;
+  });
+
+  document.getElementById('countNote').textContent = `${filtered.length.toLocaleString('en-IN')} transactions`;
+
+  const start = (state.page-1)*state.pageSize;
+  const pageRows = filtered.slice(start, start+state.pageSize);
+
+  if(pageRows.length===0){
+    document.getElementById('tableHost').innerHTML = `<div class="empty">No transactions match your filters.</div>`;
+    document.getElementById('pager').style.display='none';
+    return;
+  }
+
+  let html = `<table><thead><tr>
+    <th data-k="date" class="mono">Date</th>
+    <th data-k="category">Category</th>
+    <th data-k="counterparty">Counterparty</th>
+    <th>Direction</th>
+    <th data-k="amount" class="mono" style="text-align:right">Amount</th>
+  </tr></thead><tbody>`;
+  pageRows.forEach(t=>{
+    const cls = t.direction==='IN'?'in':(t.direction==='OUT'?'out':'');
+    html += `<tr>
+      <td class="mono">${fmtDate(t.date)}</td>
+      <td>${escapeHtml(t.category)}</td>
+      <td class="name">${escapeHtml(t.counterparty)}</td>
+      <td><span class="tag ${t.direction}">${t.direction}</span></td>
+      <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  document.getElementById('tableHost').innerHTML = html;
+  attachHeaderSort();
+  renderPager(filtered.length);
+}
+
+function attachHeaderSort(){
+  document.querySelectorAll('thead th[data-k]').forEach(th=>{
+    th.addEventListener('click', ()=>{
+      const k = th.dataset.k;
+      if(state.sortKey===k) state.sortDir *= -1; else { state.sortKey=k; state.sortDir = -1; }
+      render();
+    });
+    if(th.dataset.k===state.sortKey) th.classList.add('sorted');
+  });
+}
+
+function attachRowClicks(){
+  document.querySelectorAll('.agg-row').forEach(tr=>{
+    tr.addEventListener('click', ()=>{
+      const name = decodeURIComponent(tr.dataset.name);
+      const dir = tr.dataset.dir;
+      const key = name+'|'+dir;
+      state.openRow = state.openRow===key ? null : key;
+      render();
+    });
+  });
+}
+
+function renderPager(total){
+  const pages = Math.max(1, Math.ceil(total/state.pageSize));
+  if(pages<=1){ document.getElementById('pager').style.display='none'; return; }
+  document.getElementById('pager').style.display='flex';
+  document.getElementById('pager').innerHTML = `
+    <button ${state.page<=1?'disabled':''} id="prevBtn">← Prev</button>
+    <span>Page ${state.page} of ${pages}</span>
+    <button ${state.page>=pages?'disabled':''} id="nextBtn">Next →</button>
+  `;
+  const prev = document.getElementById('prevBtn');
+  const next = document.getElementById('nextBtn');
+  if(prev) prev.addEventListener('click', ()=>{ state.page--; render(); });
+  if(next) next.addEventListener('click', ()=>{ state.page++; render(); });
+}
+
+function render(){
+  document.getElementById('catFilter').style.display = state.tab==='all' ? 'inline-block' : 'none';
+  if(state.tab==='in') renderAggTable(aggIn, 'IN');
+  else if(state.tab==='out') renderAggTable(aggOut, 'OUT');
+  else renderAllTable();
+}
+</script>
+</body>
+</html>
