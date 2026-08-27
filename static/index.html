@@ -291,6 +291,10 @@
     <div class="controls">
       <input class="search" type="text" id="searchBox" placeholder="Search counterparty…" />
       <select id="catFilter" style="display:none"><option value="">All categories</option></select>
+      <select id="dateSort" style="display:none">
+        <option value="desc">Newest first</option>
+        <option value="asc">Oldest first</option>
+      </select>
       <span class="count-note" id="countNote"></span>
     </div>
 
@@ -449,6 +453,12 @@ document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>{
 
 document.getElementById('searchBox').addEventListener('input', e=>{ state.search = e.target.value.toLowerCase(); state.page=1; render(); });
 document.getElementById('catFilter').addEventListener('change', e=>{ state.category = e.target.value; state.page=1; render(); });
+document.getElementById('dateSort').addEventListener('change', e=>{
+  state.sortKey = 'date';
+  state.sortDir = e.target.value==='desc' ? -1 : 1;
+  state.page = 1;
+  render();
+});
 
 function renderCounterpartyList(){
   let filtered = counterparties.filter(r => r.name.toLowerCase().includes(state.search));
@@ -514,9 +524,15 @@ function renderCounterpartyDetail(name){
 
   let html = `
     <button class="back-link" id="backBtn"><i>&larr;</i> Back to counterparties</button>
-    <div class="detail-header">
-      <h2>${escapeHtml(name)}</h2>
-      <div class="sub-note">Every transaction with this counterparty, both directions</div>
+    <div class="detail-header" style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;">
+      <div>
+        <h2>${escapeHtml(name)}</h2>
+        <div class="sub-note">Every transaction with this counterparty, both directions</div>
+      </div>
+      <select id="detailDateSort">
+        <option value="desc" ${state.detailSortKey==='date' && state.detailSortDir===-1 ? 'selected':''}>Newest first</option>
+        <option value="asc" ${state.detailSortKey==='date' && state.detailSortDir===1 ? 'selected':''}>Oldest first</option>
+      </select>
     </div>
     <div class="detail-stats">
       <div class="stat"><div class="label">Money in</div><div class="value in">${fmtAmt(totalIn)}</div></div>
@@ -544,6 +560,12 @@ function renderCounterpartyDetail(name){
   html += '</tbody></table>';
   document.getElementById('tableHost').innerHTML = html;
   document.getElementById('pager').style.display = 'none';
+
+  document.getElementById('detailDateSort').addEventListener('change', e=>{
+    state.detailSortKey = 'date';
+    state.detailSortDir = e.target.value==='desc' ? -1 : 1;
+    render();
+  });
 
   document.getElementById('backBtn').addEventListener('click', ()=>{
     state.view='list'; state.selected=null;
@@ -651,6 +673,7 @@ function renderPager(total){
 function render(){
   if(state.view==='detail'){
     document.getElementById('catFilter').style.display = 'none';
+    document.getElementById('dateSort').style.display = 'none';
     document.querySelector('.controls').style.display = 'none';
     renderCounterpartyDetail(state.selected);
     return;
@@ -658,6 +681,11 @@ function render(){
   document.getElementById('tabBar').style.display='flex';
   document.querySelector('.controls').style.display = 'flex';
   document.getElementById('catFilter').style.display = state.tab==='all' ? 'inline-block' : 'none';
+  const dateSortEl = document.getElementById('dateSort');
+  dateSortEl.style.display = state.tab==='all' ? 'inline-block' : 'none';
+  if(state.tab==='all' && state.sortKey==='date'){
+    dateSortEl.value = state.sortDir===-1 ? 'desc' : 'asc';
+  }
   if(state.tab==='counterparties') renderCounterpartyList();
   else renderAllTable();
 }
