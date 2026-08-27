@@ -295,10 +295,10 @@
 
   <div id="screenUpload">
     <div class="upload-panel" id="uploadPanel">
-      <p>Drop your ICICI bank statement here, or choose a file.</p>
-      <label class="upload-btn" for="fileInput">Choose Excel file</label>
-      <input type="file" id="fileInput" accept=".xlsx,.xls" />
-      <div class="file-hint">Works with ICICI savings and current account statements exported as Excel (.xlsx or .xls)</div>
+      <p>Drop one or more ICICI bank statements here, or choose files.</p>
+      <label class="upload-btn" for="fileInput">Choose Excel file(s)</label>
+      <input type="file" id="fileInput" accept=".xlsx,.xls" multiple />
+      <div class="file-hint">Works with ICICI savings and current account statements exported as Excel (.xlsx or .xls). Select or drop more than one file to analyse them together.</div>
     </div>
     <div style="text-align:center;margin-top:16px;">
       <button class="reset-link" id="viewHistoryLink">View previously analysed statements</button>
@@ -314,6 +314,43 @@
       <div id="historyList" class="table-card"><div class="empty">Loading…</div></div>
     </div>
   </div>
+
+  <div id="screenBulk" style="display:none;">
+    <button class="back-link" id="bulkBackBtn"><i>&larr;</i> Back to statement history</button>
+    <div class="glass history-panel">
+      <div class="heading">Bulk upload &mdash; <span id="bulkFileCount"></span></div>
+      <div id="bulkWarnings"></div>
+      <div id="bulkFileList" class="table-card"></div>
+    </div>
+
+    <div class="stats" id="bulkStatStrip" style="margin-top:22px;"></div>
+
+    <div class="tabs" id="bulkTabBar">
+      <button class="tab active" data-btab="counterparties">Combined Counterparties</button>
+      <button class="tab" data-btab="all">All Transactions</button>
+    </div>
+
+    <div class="controls">
+      <input class="search" type="text" id="bulkSearchBox" placeholder="Search counterparty…" />
+      <select id="bulkCatFilter" style="display:none"><option value="">All categories</option></select>
+      <button class="export-btn" id="bulkExportBtn">Export to Excel</button>
+      <button class="export-btn outline" id="bulkExportPdfBtn">Export to PDF</button>
+      <span class="count-note" id="bulkCountNote"></span>
+    </div>
+
+    <div id="bulkTableHost" class="table-card"></div>
+  </div>
+
+  <div id="screenBulkDetail" style="display:none;">
+    <button class="back-link" id="bulkDetailBackBtn"><i>&larr;</i> Back to combined counterparties</button>
+    <div class="detail-header">
+      <h2 id="bulkDetailName"></h2>
+      <div class="sub-note">Every transaction with this counterparty, across all uploaded files</div>
+    </div>
+    <div class="detail-stats" id="bulkDetailStats"></div>
+    <div id="bulkDetailTableHost" class="table-card"></div>
+  </div>
+
 
   <div class="app-body" id="appBody">
     <button class="back-link" id="backToHistoryBtn"><i>&larr;</i> Back to statement history</button>
@@ -359,6 +396,8 @@ const fileInput = document.getElementById('fileInput');
 const uploadPanel = document.getElementById('uploadPanel');
 const screenUpload = document.getElementById('screenUpload');
 const screenHistory = document.getElementById('screenHistory');
+const screenBulk = document.getElementById('screenBulk');
+const screenBulkDetail = document.getElementById('screenBulkDetail');
 const errorBox = document.getElementById('errorBox');
 const loadingBox = document.getElementById('loadingBox');
 const appBody = document.getElementById('appBody');
@@ -366,6 +405,8 @@ const appBody = document.getElementById('appBody');
 function showScreen(name){
   screenUpload.style.display = name==='upload' ? 'block' : 'none';
   screenHistory.style.display = name==='history' ? 'block' : 'none';
+  screenBulk.style.display = name==='bulk' ? 'block' : 'none';
+  screenBulkDetail.style.display = name==='bulkdetail' ? 'block' : 'none';
   appBody.style.display = name==='results' ? 'block' : 'none';
   if(name==='history') loadHistory();
 }
@@ -377,12 +418,12 @@ function showScreen(name){
   e.preventDefault(); uploadPanel.classList.remove('drag');
 }));
 uploadPanel.addEventListener('drop', e=>{
-  const f = e.dataTransfer.files[0];
-  if(f) handleFile(f);
+  const files = Array.from(e.dataTransfer.files || []);
+  if(files.length) handleFiles(files);
 });
 fileInput.addEventListener('change', e=>{
-  const f = e.target.files[0];
-  if(f) handleFile(f);
+  const files = Array.from(e.target.files || []);
+  if(files.length) handleFiles(files);
 });
 document.getElementById('viewHistoryLink').addEventListener('click', ()=> showScreen('history'));
 document.getElementById('newUploadBtn').addEventListener('click', ()=>{
@@ -393,11 +434,26 @@ document.getElementById('backToHistoryBtn').addEventListener('click', ()=>{
   fileInput.value = '';
   showScreen('history');
 });
+document.getElementById('bulkBackBtn').addEventListener('click', ()=>{
+  fileInput.value = '';
+  showScreen('history');
+});
+document.getElementById('bulkDetailBackBtn').addEventListener('click', ()=>{
+  showScreen('bulk');
+});
 
 function showError(msg){
   errorBox.textContent = msg;
   errorBox.style.display = 'block';
   loadingBox.style.display = 'none';
+}
+
+function handleFiles(files){
+  if(files.length === 1){
+    handleFile(files[0]);
+  }else{
+    handleBulkFiles(files);
+  }
 }
 
 async function handleFile(file){
@@ -426,12 +482,44 @@ async function handleFile(file){
   }
 }
 
+async function handleBulkFiles(files){
+  errorBox.style.display = 'none';
+  loadingBox.style.display = 'block';
+  showScreen('none');
+
+  const form = new FormData();
+  files.forEach(f => form.append('files', f));
+
+  try{
+    const res = await fetch('/api/analyze/bulk', { method:'POST', body: form });
+    const data = await res.json();
+    loadingBox.style.display = 'none';
+    if(!res.ok){
+      showScreen('upload');
+      showError(data.error || 'Something went wrong while processing these files.');
+      return;
+    }
+    showScreen('bulk');
+    initBulkApp(data);
+  }catch(err){
+    loadingBox.style.display = 'none';
+    showScreen('upload');
+    showError('Could not reach the server. Please try again.');
+  }
+}
+
 // ---- app logic (operates on data returned by the API) ----
 let txns = [];
 let counterparties = []; // merged, both directions
 let counterpartyCategories = new Map(); // name -> Set of categories seen for that counterparty
 let MAXAGG = 1;
 let state = { view:'list', tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1, detailCategory:'', detailDirection:'', detailAmountMin:null, detailAmountMax:null, detailDateFrom:null, detailDateTo:null };
+
+// ---- bulk upload state (separate from the single-file view above) ----
+let bulkTxns = [];
+let bulkCounterparties = [];
+let bulkFilesList = [];
+let bulkState = { tab:'counterparties', search:'', category:'', page:1, pageSize:50, selected:null };
 
 function fmtAmt(n){
   if(n===null||n===undefined) return '—';
@@ -567,7 +655,7 @@ function initApp(transactions, summary, meta){
   });
 
   state = { view:'list', tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1, detailCategory:'', detailDirection:'', detailAmountMin:null, detailAmountMax:null, detailDateFrom:null, detailDateTo:null };
-  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab==='counterparties'));
+  document.querySelectorAll('#tabBar .tab').forEach(t=>t.classList.toggle('active', t.dataset.tab==='counterparties'));
   document.getElementById('searchBox').value = '';
   document.getElementById('amountMin').value = '';
   document.getElementById('amountMax').value = '';
@@ -578,8 +666,8 @@ function initApp(transactions, summary, meta){
   render();
 }
 
-document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>{
-  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+document.querySelectorAll('#tabBar .tab').forEach(t=>t.addEventListener('click', ()=>{
+  document.querySelectorAll('#tabBar .tab').forEach(x=>x.classList.remove('active'));
   t.classList.add('active');
   state.view = 'list';
   state.tab = t.dataset.tab;
@@ -1118,6 +1206,260 @@ function render(){
   }
   if(state.tab==='counterparties') renderCounterpartyList();
   else renderAllTable();
+}
+
+// ---- bulk upload rendering ----
+
+function initBulkApp(data){
+  bulkFilesList = data.files || [];
+  bulkTxns = (data.transactions || []).map(t => ({...t, amount: t.direction==='IN' ? t.cr : t.dr}));
+  const summary = data.combined_summary;
+  bulkCounterparties = summary ? mergeCounterparties(summary.payers, summary.payees) : [];
+  bulkState = { tab:'counterparties', search:'', category:'', page:1, pageSize:50, selected:null };
+
+  const okCount = bulkFilesList.filter(f=>f.status==='ok').length;
+  const failCount = bulkFilesList.length - okCount;
+  document.getElementById('bulkFileCount').textContent =
+    `${bulkFilesList.length} file${bulkFilesList.length===1?'':'s'} (${okCount} parsed${failCount ? ', ' + failCount + ' failed' : ''})`;
+
+  const stats = summary ? [
+    {label:'Total Money In', value: fmtAmt(summary.total_in), cls:'in'},
+    {label:'Total Money Out', value: fmtAmt(summary.total_out), cls:'out'},
+    {label:'Net Movement', value: fmtAmt(summary.net), cls:'net ' + (summary.net>=0?'pos':'neg')},
+    {label:'Counterparties', value: bulkCounterparties.length.toLocaleString('en-IN'), cls:''},
+  ] : [];
+  document.getElementById('bulkStatStrip').innerHTML = stats.map(s=>
+    `<div class="stat"><div class="label">${s.label}</div><div class="value ${s.cls}">${s.value}</div></div>`
+  ).join('');
+
+  const cats = Array.from(new Set(bulkTxns.map(t=>t.category))).sort();
+  const catSel = document.getElementById('bulkCatFilter');
+  catSel.innerHTML = '<option value="">All categories</option>';
+  cats.forEach(c=>{
+    const o = document.createElement('option'); o.value=c; o.textContent=c; catSel.appendChild(o);
+  });
+
+  document.querySelectorAll('#bulkTabBar .tab').forEach(t=>t.classList.toggle('active', t.dataset.btab==='counterparties'));
+  document.getElementById('bulkSearchBox').value = '';
+
+  renderBulkWarnings(data.warnings || []);
+  renderBulkFileList();
+  renderBulk();
+}
+
+function renderBulkWarnings(warnings){
+  const host = document.getElementById('bulkWarnings');
+  if(!warnings || warnings.length===0){ host.innerHTML=''; return; }
+  host.innerHTML = warnings.map(w=>
+    `<div class="error-box" style="display:block;margin-bottom:10px;">${escapeHtml(w)}</div>`
+  ).join('');
+}
+
+function renderBulkFileList(){
+  let html = `<table><thead><tr>
+    <th>File</th><th>Account</th><th>Period</th>
+    <th class="mono" style="text-align:right">In</th>
+    <th class="mono" style="text-align:right">Out</th>
+    <th>Status</th>
+  </tr></thead><tbody>`;
+  bulkFilesList.forEach(f=>{
+    if(f.status==='ok'){
+      const acct = [f.account_name, f.account_no].filter(Boolean).join(' · ') || '—';
+      html += `<tr class="bulk-file-row" data-id="${f.statement_id}">
+        <td class="name">${escapeHtml(f.filename)}</td>
+        <td>${escapeHtml(acct)}</td>
+        <td class="mono">${fmtDate(f.period_start)} &ndash; ${fmtDate(f.period_end)}</td>
+        <td class="amt in">${fmtAmt(f.total_in)}</td>
+        <td class="amt out">${fmtAmt(f.total_out)}</td>
+        <td><span class="tag IN">Parsed</span></td>
+      </tr>`;
+    }else{
+      html += `<tr>
+        <td class="name">${escapeHtml(f.filename)}</td>
+        <td colspan="3" style="color:var(--muted);font-size:12.5px;">${escapeHtml(f.error||'Could not be parsed')}</td>
+        <td><span class="tag OUT">Failed</span></td>
+      </tr>`;
+    }
+  });
+  html += '</tbody></table>';
+  document.getElementById('bulkFileList').innerHTML = html;
+
+  document.querySelectorAll('.bulk-file-row').forEach(tr=>{
+    tr.addEventListener('click', ()=>{
+      const id = tr.dataset.id;
+      if(id && id!=='None') openStatement(id);
+    });
+  });
+}
+
+document.querySelectorAll('#bulkTabBar .tab').forEach(t=>t.addEventListener('click', ()=>{
+  document.querySelectorAll('#bulkTabBar .tab').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');
+  bulkState.tab = t.dataset.btab;
+  bulkState.page = 1; bulkState.search=''; bulkState.category='';
+  document.getElementById('bulkSearchBox').value = '';
+  document.getElementById('bulkCatFilter').value = '';
+  renderBulk();
+}));
+document.getElementById('bulkSearchBox').addEventListener('input', e=>{
+  bulkState.search = e.target.value.toLowerCase(); bulkState.page=1; renderBulk();
+});
+document.getElementById('bulkCatFilter').addEventListener('change', e=>{
+  bulkState.category = e.target.value; bulkState.page=1; renderBulk();
+});
+document.getElementById('bulkExportBtn').addEventListener('click', ()=>{
+  if(bulkState.tab==='all'){
+    exportTransactionsToExcel(getFilteredBulkTransactions(), 'bulk_transactions');
+  }else{
+    exportCounterpartiesToExcel(getFilteredBulkCounterparties(), 'bulk_counterparties');
+  }
+});
+document.getElementById('bulkExportPdfBtn').addEventListener('click', ()=>{
+  if(bulkState.tab==='all'){
+    exportTransactionsToPDF(getFilteredBulkTransactions(), 'bulk_transactions', 'Bulk upload — all transactions');
+  }else{
+    exportCounterpartiesToPDF(getFilteredBulkCounterparties(), 'bulk_counterparties', 'Bulk upload — combined counterparties');
+  }
+});
+
+function bulkCounterpartyFileMap(){
+  const map = new Map();
+  bulkTxns.forEach(t=>{
+    if(!map.has(t.counterparty)) map.set(t.counterparty, new Set());
+    map.get(t.counterparty).add(t.source_filename);
+  });
+  return map;
+}
+
+function getFilteredBulkCounterparties(){
+  const fileMap = bulkCounterpartyFileMap();
+  let filtered = bulkCounterparties.filter(r => r.name.toLowerCase().includes(bulkState.search));
+  if(bulkState.category){
+    filtered = filtered.filter(r=>{
+      return bulkTxns.some(t => t.counterparty===r.name && t.category===bulkState.category);
+    });
+  }
+  filtered = filtered.map(r => ({...r, fileCount: (fileMap.get(r.name)||new Set()).size}));
+  return filtered.sort((a,b)=>b.activity-a.activity);
+}
+
+function getFilteredBulkTransactions(){
+  return bulkTxns.filter(t=>{
+    if(bulkState.category && t.category!==bulkState.category) return false;
+    if(bulkState.search){
+      const s = bulkState.search;
+      if(!t.counterparty.toLowerCase().includes(s) && !t.category.toLowerCase().includes(s)) return false;
+    }
+    return true;
+  }).sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+}
+
+function renderBulk(){
+  document.getElementById('bulkCatFilter').style.display = bulkState.tab==='all' ? 'inline-block' : 'none';
+  if(bulkState.tab==='counterparties') renderBulkCounterpartyList();
+  else renderBulkAllTransactions();
+}
+
+function renderBulkCounterpartyList(){
+  const filtered = getFilteredBulkCounterparties();
+  document.getElementById('bulkCountNote').textContent = `${filtered.length.toLocaleString('en-IN')} counterparties`;
+
+  const start = (bulkState.page-1)*bulkState.pageSize;
+  const pageRows = filtered.slice(start, start+bulkState.pageSize);
+  if(pageRows.length===0){
+    document.getElementById('bulkTableHost').innerHTML = `<div class="empty">No counterparties match your filters.</div>`;
+    return;
+  }
+  const maxAgg = Math.max(1, ...filtered.map(r=>r.activity));
+  let html = `<table><thead><tr>
+    <th>Counterparty</th><th class="mono">Files</th><th class="mono">Txns</th>
+    <th class="mono" style="text-align:right">Money in</th>
+    <th class="mono" style="text-align:right">Money out</th>
+  </tr></thead><tbody>`;
+  pageRows.forEach(r=>{
+    const pctIn = (r.total_in/maxAgg*100).toFixed(1);
+    const pctOut = (r.total_out/maxAgg*100).toFixed(1);
+    html += `<tr class="bulk-cp-row" data-name="${encodeURIComponent(r.name)}">
+      <td class="name">${escapeHtml(r.name)}</td>
+      <td class="mono">${r.fileCount}</td>
+      <td class="mono">${r.count}</td>
+      <td class="amt in">${r.total_in ? fmtAmt(r.total_in) : '—'}<div class="bar in" style="width:${pctIn}%"></div></td>
+      <td class="amt out">${r.total_out ? fmtAmt(r.total_out) : '—'}<div class="bar out" style="width:${pctOut}%"></div></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  document.getElementById('bulkTableHost').innerHTML = html;
+  document.querySelectorAll('.bulk-cp-row').forEach(tr=>{
+    tr.addEventListener('click', ()=>{
+      bulkState.selected = decodeURIComponent(tr.dataset.name);
+      showScreen('bulkdetail');
+      renderBulkDetail(bulkState.selected);
+    });
+  });
+}
+
+function renderBulkAllTransactions(){
+  const filtered = getFilteredBulkTransactions();
+  document.getElementById('bulkCountNote').textContent = `${filtered.length.toLocaleString('en-IN')} transactions`;
+
+  const start = (bulkState.page-1)*bulkState.pageSize;
+  const pageRows = filtered.slice(start, start+bulkState.pageSize);
+  if(pageRows.length===0){
+    document.getElementById('bulkTableHost').innerHTML = `<div class="empty">No transactions match your filters.</div>`;
+    return;
+  }
+  let html = `<table><thead><tr>
+    <th class="mono">Date</th><th>File</th><th>Category</th><th>Counterparty</th><th>Direction</th>
+    <th class="mono" style="text-align:right">Amount</th>
+  </tr></thead><tbody>`;
+  pageRows.forEach(t=>{
+    const cls = t.direction==='IN'?'in':(t.direction==='OUT'?'out':'');
+    html += `<tr>
+      <td class="mono">${fmtDate(t.date)}</td>
+      <td style="font-size:12px;color:var(--muted);">${escapeHtml(t.source_filename||'')}</td>
+      <td>${escapeHtml(t.category)}</td>
+      <td class="name">${escapeHtml(t.counterparty)}</td>
+      <td><span class="tag ${t.direction}">${t.direction}</span></td>
+      <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  document.getElementById('bulkTableHost').innerHTML = html;
+}
+
+function renderBulkDetail(name){
+  const rows = bulkTxns.filter(t=>t.counterparty===name).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const totalIn = rows.filter(t=>t.direction==='IN').reduce((a,t)=>a+t.cr,0);
+  const totalOut = rows.filter(t=>t.direction==='OUT').reduce((a,t)=>a+t.dr,0);
+  const fileCount = new Set(rows.map(t=>t.source_filename)).size;
+
+  document.getElementById('bulkDetailName').textContent = name;
+  document.getElementById('bulkDetailStats').innerHTML = `
+    <div class="stat"><div class="label">Money in</div><div class="value in">${fmtAmt(totalIn)}</div></div>
+    <div class="stat"><div class="label">Money out</div><div class="value out">${fmtAmt(totalOut)}</div></div>
+    <div class="stat"><div class="label">Net</div><div class="value ${totalIn-totalOut>=0?'net pos':'net neg'}">${fmtAmt(totalIn-totalOut)}</div></div>
+    <div class="stat"><div class="label">Transactions</div><div class="value">${rows.length}</div></div>
+    <div class="stat"><div class="label">Files</div><div class="value">${fileCount}</div></div>
+  `;
+
+  let html = `<table><thead><tr>
+    <th class="mono">Date</th><th>File</th><th>Category</th><th>Direction</th>
+    <th class="mono" style="text-align:right">Amount</th>
+    <th class="mono" style="text-align:right">Balance after</th>
+  </tr></thead><tbody>`;
+  rows.forEach(t=>{
+    const cls = t.direction==='IN'?'in':(t.direction==='OUT'?'out':'');
+    html += `<tr>
+      <td class="mono">${fmtDate(t.date)}</td>
+      <td style="font-size:12px;color:var(--muted);">${escapeHtml(t.source_filename||'')}</td>
+      <td>${escapeHtml(t.category)}</td>
+      <td><span class="tag ${t.direction}">${t.direction}</span></td>
+      <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
+      <td class="mono" style="text-align:right">${fmtAmt(t.balance)}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  document.getElementById('bulkDetailTableHost').innerHTML = html;
 }
 
 showScreen('upload');

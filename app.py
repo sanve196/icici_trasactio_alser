@@ -35,6 +35,43 @@ def health_db():
     return jsonify({"db_connected": ok, "detail": detail}), (200 if ok else 503)
 
 
+def _analyze_one(upload):
+    """
+    Parse + save a single uploaded file. Returns a dict describing the outcome —
+    never raises; failures come back as {"ok": False, "error": ...} so a batch
+    of files can process independently.
+    """
+    filename = upload.filename or "(unnamed file)"
+
+    if not filename.lower().endswith((".xlsx", ".xls")):
+        return {"ok": False, "filename": filename, "error": "Please upload an .xlsx or .xls file."}
+
+    try:
+        data = io.BytesIO(upload.read())
+        transactions, account_info = parse_workbook(data)
+        summary = build_summary(transactions)
+    except StatementFormatError as e:
+        return {"ok": False, "filename": filename, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "filename": filename, "error": f"Could not parse this file: {e}"}
+
+    statement_id = None
+    try:
+        statement_id = save_statement(filename, account_info, summary, transactions)
+    except Exception as e:
+        print(f"Could not save statement to DB: {e}")
+
+    return {
+        "ok": True,
+        "filename": filename,
+        "statement_id": statement_id,
+        "account_no": account_info.get("account_no"),
+        "account_name": account_info.get("account_name"),
+        "summary": summary,
+        "transactions": transactions,
+    }
+
+
 @app.post("/api/analyze")
 def analyze():
     if "file" not in request.files:
@@ -43,32 +80,93 @@ def analyze():
     upload = request.files["file"]
     if not upload.filename:
         return jsonify({"error": "No file selected."}), 400
-    if not upload.filename.lower().endswith((".xlsx", ".xls")):
-        return jsonify({"error": "Please upload an .xlsx or .xls file."}), 400
 
-    try:
-        data = io.BytesIO(upload.read())
-        transactions, account_info = parse_workbook(data)
-        summary = build_summary(transactions)
-    except StatementFormatError as e:
-        return jsonify({"error": str(e)}), 422
-    except Exception as e:
-        return jsonify({"error": f"Could not parse this file: {e}"}), 422
-
-    statement_id = None
-    try:
-        statement_id = save_statement(upload.filename, account_info, summary, transactions)
-    except Exception as e:
-        # Analysis still succeeds even if we couldn't save it for later.
-        print(f"Could not save statement to DB: {e}")
+    result = _analyze_one(upload)
+    if not result["ok"]:
+        status = 422
+        return jsonify({"error": result["error"]}), status
 
     return jsonify({
-        "statement_id": statement_id,
-        "filename": upload.filename,
-        "account_no": account_info.get("account_no"),
-        "account_name": account_info.get("account_name"),
-        "summary": summary,
-        "transactions": transactions,
+        "statement_id": result["statement_id"],
+        "filename": result["filename"],
+        "account_no": result["account_no"],
+        "account_name": result["account_name"],
+        "summary": result["summary"],
+        "transactions": result["transactions"],
+    })
+
+
+def _ranges_overlap(a_start, a_end, b_start, b_end):
+    if not (a_start and a_end and b_start and b_end):
+        return False
+    return a_start <= b_end and b_start <= a_end
+
+
+@app.post("/api/analyze/bulk")
+def analyze_bulk():
+    uploads = request.files.getlist("files")
+    if not uploads:
+        return jsonify({"error": "No files uploaded. Attach one or more files as 'files'."}), 400
+
+    files_result = []
+    combined_transactions = []
+
+    for upload in uploads:
+        if not upload.filename:
+            continue
+        result = _analyze_one(upload)
+
+        if not result["ok"]:
+            files_result.append({
+                "filename": result["filename"],
+                "status": "error",
+                "error": result["error"],
+            })
+            continue
+
+        s = result["summary"]
+        files_result.append({
+            "filename": result["filename"],
+            "status": "ok",
+            "statement_id": result["statement_id"],
+            "account_no": result["account_no"],
+            "account_name": result["account_name"],
+            "period_start": s["period_start"],
+            "period_end": s["period_end"],
+            "total_in": s["total_in"],
+            "total_out": s["total_out"],
+            "transaction_count": s["total_transactions"],
+        })
+
+        for t in result["transactions"]:
+            tagged = dict(t)
+            tagged["source_filename"] = result["filename"]
+            tagged["source_account_no"] = result["account_no"]
+            tagged["source_account_name"] = result["account_name"]
+            combined_transactions.append(tagged)
+
+    # Flag overlapping statement periods for the same account — a likely
+    # accidental duplicate upload, not auto-deduplicated.
+    warnings = []
+    ok_files = [f for f in files_result if f["status"] == "ok"]
+    for i in range(len(ok_files)):
+        for j in range(i + 1, len(ok_files)):
+            a, b = ok_files[i], ok_files[j]
+            if a["account_no"] and a["account_no"] == b["account_no"] and _ranges_overlap(
+                a["period_start"], a["period_end"], b["period_start"], b["period_end"]
+            ):
+                warnings.append(
+                    f"\"{a['filename']}\" and \"{b['filename']}\" cover overlapping dates "
+                    f"for the same account — check they aren't duplicates."
+                )
+
+    combined_summary = build_summary(combined_transactions) if combined_transactions else None
+
+    return jsonify({
+        "files": files_result,
+        "warnings": warnings,
+        "combined_summary": combined_summary,
+        "transactions": combined_transactions,
     })
 
 
