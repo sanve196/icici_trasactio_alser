@@ -431,7 +431,7 @@ let txns = [];
 let counterparties = []; // merged, both directions
 let counterpartyCategories = new Map(); // name -> Set of categories seen for that counterparty
 let MAXAGG = 1;
-let state = { view:'list', tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1 };
+let state = { view:'list', tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1, detailCategory:'', detailDirection:'', detailAmountMin:null, detailAmountMax:null, detailDateFrom:null, detailDateTo:null };
 
 function fmtAmt(n){
   if(n===null||n===undefined) return '—';
@@ -566,7 +566,7 @@ function initApp(transactions, summary, meta){
     const o = document.createElement('option'); o.value=c; o.textContent=c; catSel.appendChild(o);
   });
 
-  state = { view:'list', tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1 };
+  state = { view:'list', tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1, detailCategory:'', detailDirection:'', detailAmountMin:null, detailAmountMax:null, detailDateFrom:null, detailDateTo:null };
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab==='counterparties'));
   document.getElementById('searchBox').value = '';
   document.getElementById('amountMin').value = '';
@@ -771,7 +771,19 @@ function renderCounterpartyList(){
 }
 
 function renderCounterpartyDetail(name){
-  const rows = txns.filter(t=>t.counterparty===name);
+  const allRows = txns.filter(t=>t.counterparty===name);
+  const cats = Array.from(new Set(allRows.map(t=>t.category))).sort();
+
+  const rows = allRows.filter(t=>{
+    if(state.detailCategory && t.category!==state.detailCategory) return false;
+    if(state.detailDirection && t.direction!==state.detailDirection) return false;
+    if(state.detailAmountMin!=null && t.amount < state.detailAmountMin) return false;
+    if(state.detailAmountMax!=null && t.amount > state.detailAmountMax) return false;
+    if(state.detailDateFrom && (!t.date || t.date < state.detailDateFrom)) return false;
+    if(state.detailDateTo && (!t.date || t.date > state.detailDateTo)) return false;
+    return true;
+  });
+
   const totalIn = rows.filter(t=>t.direction==='IN').reduce((a,t)=>a+t.cr,0);
   const totalOut = rows.filter(t=>t.direction==='OUT').reduce((a,t)=>a+t.dr,0);
   let largest = null;
@@ -786,14 +798,15 @@ function renderCounterpartyDetail(name){
   });
 
   document.getElementById('tabBar').style.display='none';
-  document.getElementById('countNote').textContent = `${rows.length.toLocaleString('en-IN')} transactions`;
+
+  const catOptions = cats.map(c=>`<option value="${escapeHtml(c)}" ${state.detailCategory===c?'selected':''}>${escapeHtml(c)}</option>`).join('');
 
   let html = `
     <button class="back-link" id="backBtn"><i>&larr;</i> Back to counterparties</button>
     <div class="detail-header" style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;">
       <div>
         <h2>${escapeHtml(name)}</h2>
-        <div class="sub-note">Every transaction with this counterparty, both directions</div>
+        <div class="sub-note">Every transaction with this counterparty &mdash; filter below, then export</div>
       </div>
       <div style="display:flex;gap:10px;align-items:center;">
         <select id="detailDateSort">
@@ -803,6 +816,21 @@ function renderCounterpartyDetail(name){
         <button class="export-btn" id="detailExportBtn">Export to Excel</button>
         <button class="export-btn outline" id="detailExportPdfBtn">Export to PDF</button>
       </div>
+    </div>
+    <div class="controls" style="margin-top:2px;">
+      <select id="detailCategoryFilter"><option value="">All categories</option>${catOptions}</select>
+      <select id="detailDirectionFilter">
+        <option value="" ${state.detailDirection===''?'selected':''}>In &amp; out</option>
+        <option value="IN" ${state.detailDirection==='IN'?'selected':''}>Money in only</option>
+        <option value="OUT" ${state.detailDirection==='OUT'?'selected':''}>Money out only</option>
+      </select>
+      <span class="filter-label">Amount</span>
+      <input type="number" id="detailAmountMin" placeholder="Min ₹" value="${state.detailAmountMin!=null?state.detailAmountMin:''}" />
+      <input type="number" id="detailAmountMax" placeholder="Max ₹" value="${state.detailAmountMax!=null?state.detailAmountMax:''}" />
+      <span class="filter-label">Date</span>
+      <input type="date" id="detailDateFrom" value="${state.detailDateFrom||''}" />
+      <input type="date" id="detailDateTo" value="${state.detailDateTo||''}" />
+      <span class="count-note">${rows.length.toLocaleString('en-IN')} of ${allRows.length.toLocaleString('en-IN')} transactions</span>
     </div>
     <div class="detail-stats">
       <div class="stat"><div class="label">Money in</div><div class="value in">${fmtAmt(totalIn)}</div></div>
@@ -815,24 +843,32 @@ function renderCounterpartyDetail(name){
         ${largest ? `<div style="font-size:11px;color:var(--muted);margin-top:4px;">${fmtDate(largest.date)} · ${escapeHtml(largest.category)}</div>` : ''}
       </div>
     </div>
-    <table><thead><tr>
+    <div id="detailTableHost" class="table-card">`;
+
+  if(sorted.length===0){
+    html += `<div class="empty">No transactions match these filters.</div>`;
+  }else{
+    html += `<table><thead><tr>
       <th data-k="date" class="mono">Date</th>
       <th data-k="category">Category</th>
       <th>Direction</th>
       <th data-k="amount" class="mono" style="text-align:right">Amount</th>
       <th class="mono" style="text-align:right">Balance after</th>
     </tr></thead><tbody>`;
-  sorted.forEach(t=>{
-    const cls = t.direction==='IN'?'in':(t.direction==='OUT'?'out':'');
-    html += `<tr>
-      <td class="mono">${fmtDate(t.date)}</td>
-      <td>${escapeHtml(t.category)}</td>
-      <td><span class="tag ${t.direction}">${t.direction}</span></td>
-      <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
-      <td class="mono" style="text-align:right">${fmtAmt(t.balance)}</td>
-    </tr>`;
-  });
-  html += '</tbody></table>';
+    sorted.forEach(t=>{
+      const cls = t.direction==='IN'?'in':(t.direction==='OUT'?'out':'');
+      html += `<tr>
+        <td class="mono">${fmtDate(t.date)}</td>
+        <td>${escapeHtml(t.category)}</td>
+        <td><span class="tag ${t.direction}">${t.direction}</span></td>
+        <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
+        <td class="mono" style="text-align:right">${fmtAmt(t.balance)}</td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+  }
+  html += '</div>';
+
   document.getElementById('tableHost').innerHTML = html;
   document.getElementById('pager').style.display = 'none';
 
@@ -840,6 +876,24 @@ function renderCounterpartyDetail(name){
     state.detailSortKey = 'date';
     state.detailSortDir = e.target.value==='desc' ? -1 : 1;
     render();
+  });
+  document.getElementById('detailCategoryFilter').addEventListener('change', e=>{
+    state.detailCategory = e.target.value; render();
+  });
+  document.getElementById('detailDirectionFilter').addEventListener('change', e=>{
+    state.detailDirection = e.target.value; render();
+  });
+  document.getElementById('detailAmountMin').addEventListener('input', e=>{
+    state.detailAmountMin = e.target.value!=='' ? parseFloat(e.target.value) : null; render();
+  });
+  document.getElementById('detailAmountMax').addEventListener('input', e=>{
+    state.detailAmountMax = e.target.value!=='' ? parseFloat(e.target.value) : null; render();
+  });
+  document.getElementById('detailDateFrom').addEventListener('change', e=>{
+    state.detailDateFrom = e.target.value || null; render();
+  });
+  document.getElementById('detailDateTo').addEventListener('change', e=>{
+    state.detailDateTo = e.target.value || null; render();
   });
   document.getElementById('detailExportBtn').addEventListener('click', ()=>{
     exportTransactionsToExcel(sorted, name.replace(/[^a-z0-9]+/gi,'_'));
@@ -853,7 +907,7 @@ function renderCounterpartyDetail(name){
     document.getElementById('tabBar').style.display='flex';
     render();
   });
-  document.querySelectorAll('thead th[data-k]').forEach(th=>{
+  document.querySelectorAll('#detailTableHost thead th[data-k]').forEach(th=>{
     th.addEventListener('click', ()=>{
       const kk = th.dataset.k;
       if(state.detailSortKey===kk) state.detailSortDir *= -1; else { state.detailSortKey=kk; state.detailSortDir=-1; }
@@ -1006,6 +1060,9 @@ function attachRowClicks(){
       state.view = 'detail';
       state.selected = decodeURIComponent(tr.dataset.name);
       state.detailSortKey = 'date'; state.detailSortDir = -1;
+      state.detailCategory = ''; state.detailDirection = '';
+      state.detailAmountMin = null; state.detailAmountMax = null;
+      state.detailDateFrom = null; state.detailDateTo = null;
       render();
     });
   });
