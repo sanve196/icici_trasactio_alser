@@ -170,13 +170,22 @@
   .tag.IN{color:var(--credit);border-color:var(--credit);}
   .tag.OUT{color:var(--debit);border-color:var(--debit);}
 
-  .drill{background:var(--panel-2);}
-  .drill td{padding:0;}
-  .drill-inner{padding:10px 10px 14px 30px;}
-  .drill-inner table{width:100%;}
-  .drill-inner th{font-size:10px;padding:5px 8px;}
-  .drill-inner td{font-size:12.5px;padding:5px 8px;color:var(--muted);}
-  .drill-inner td.amt{color:var(--paper);}
+  .back-link{
+    font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--brass);
+    background:none;border:none;cursor:pointer;padding:0;margin-bottom:16px;
+    display:inline-flex;align-items:center;gap:6px;
+  }
+  .back-link:hover{text-decoration:underline;}
+  .detail-header{margin-bottom:16px;}
+  .detail-header h2{
+    font-family:'Fraunces',serif;font-weight:600;font-size:22px;margin:0 0 4px;color:var(--paper);
+  }
+  .detail-header .sub-note{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted);}
+  .detail-stats{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1px;
+    background:var(--line);border:1px solid var(--line);margin-bottom:22px;
+  }
+  .detail-stats .stat{background:var(--panel);padding:14px 16px;}
 
   .pager{display:flex;gap:8px;justify-content:center;align-items:center;margin-top:16px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted);}
   .pager button{background:var(--panel);border:1px solid var(--line);color:var(--paper);padding:6px 12px;border-radius:3px;cursor:pointer;font-family:inherit;font-size:12px;}
@@ -201,7 +210,7 @@
     <div class="eyebrow">Transaction Analyser</div>
     <h1>Who paid whom, and how much</h1>
     <div class="sub">
-      <span>Upload an ICICI Statement of Account (.xlsx) to get a payer/payee breakdown</span>
+      <span>Upload an ICICI Statement of Account (.xlsx) to see every counterparty and their transactions</span>
     </div>
   </div>
 
@@ -218,9 +227,8 @@
   <div class="app-body" id="appBody">
     <div class="stats" id="statStrip"></div>
 
-    <div class="tabs">
-      <button class="tab active" data-tab="in">Payers — Money In</button>
-      <button class="tab" data-tab="out">Payees — Money Out</button>
+    <div class="tabs" id="tabBar">
+      <button class="tab active" data-tab="counterparties">Counterparties</button>
       <button class="tab" data-tab="all">All Transactions</button>
     </div>
 
@@ -236,7 +244,7 @@
     <div class="note">
       Counterparty names are parsed from the bank's free-text narration field, which ICICI truncates to 50 characters —
       some names are cut short and may represent the same real entity under slightly different labels.
-      "Payers"/"Payees" views exclude bank charges, cheque returns and unnamed cash deposits. Click any row to see its underlying transactions.
+      The Counterparties list excludes bank charges, cheque returns and unnamed cash deposits. Click any counterparty to see every transaction with them, in both directions.
       <br><br><button class="reset-link" id="resetBtn">Analyse a different file</button>
     </div>
   </div>
@@ -305,10 +313,9 @@ async function handleFile(file){
 
 // ---- app logic (operates on data returned by the API) ----
 let txns = [];
-let aggIn = [];
-let aggOut = [];
+let counterparties = []; // merged, both directions
 let MAXAGG = 1;
-let state = { tab:'in', search:'', category:'', sortKey:'total', sortDir:-1, page:1, pageSize:50, openRow:null };
+let state = { view:'list', tab:'counterparties', search:'', category:'', sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1 };
 
 function fmtAmt(n){
   if(n===null||n===undefined) return '—';
@@ -323,18 +330,37 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+function mergeCounterparties(payers, payees){
+  const map = new Map();
+  payers.forEach(p=>{
+    map.set(p.name, {name:p.name, total_in:p.total, count_in:p.count, total_out:0, count_out:0, first:p.first, last:p.last});
+  });
+  payees.forEach(p=>{
+    if(map.has(p.name)){
+      const e = map.get(p.name);
+      e.total_out = p.total; e.count_out = p.count;
+      if(p.first && (!e.first || p.first<e.first)) e.first = p.first;
+      if(p.last && (!e.last || p.last>e.last)) e.last = p.last;
+    }else{
+      map.set(p.name, {name:p.name, total_in:0, count_in:0, total_out:p.total, count_out:p.count, first:p.first, last:p.last});
+    }
+  });
+  const list = Array.from(map.values()).map(e=>({
+    ...e, count: e.count_in+e.count_out, activity: e.total_in+e.total_out
+  }));
+  return list.sort((a,b)=>b.activity-a.activity);
+}
+
 function initApp(transactions, summary){
   txns = transactions.map(t => ({...t, amount: t.direction==='IN' ? t.cr : t.dr}));
-  aggIn = summary.payers;
-  aggOut = summary.payees;
-  MAXAGG = Math.max(1, ...aggIn.map(a=>a.total), ...aggOut.map(a=>a.total));
+  counterparties = mergeCounterparties(summary.payers, summary.payees);
+  MAXAGG = Math.max(1, ...counterparties.map(a=>a.activity));
 
   const stats = [
     {label:'Total Money In', value: fmtAmt(summary.total_in), cls:'in'},
     {label:'Total Money Out', value: fmtAmt(summary.total_out), cls:'out'},
     {label:'Net Movement', value: fmtAmt(summary.net), cls:'net ' + (summary.net>=0?'pos':'neg')},
-    {label:'Unique Payers', value: aggIn.length.toLocaleString('en-IN'), cls:''},
-    {label:'Unique Payees', value: aggOut.length.toLocaleString('en-IN'), cls:''},
+    {label:'Counterparties', value: counterparties.length.toLocaleString('en-IN'), cls:''},
   ];
   document.getElementById('statStrip').innerHTML = stats.map(s=>
     `<div class="stat"><div class="label">${s.label}</div><div class="value ${s.cls}">${s.value}</div></div>`
@@ -347,8 +373,8 @@ function initApp(transactions, summary){
     const o = document.createElement('option'); o.value=c; o.textContent=c; catSel.appendChild(o);
   });
 
-  state = { tab:'in', search:'', category:'', sortKey:'total', sortDir:-1, page:1, pageSize:50, openRow:null };
-  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab==='in'));
+  state = { view:'list', tab:'counterparties', search:'', category:'', sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1 };
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab==='counterparties'));
   document.getElementById('searchBox').value = '';
   render();
 }
@@ -356,9 +382,10 @@ function initApp(transactions, summary){
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   t.classList.add('active');
+  state.view = 'list';
   state.tab = t.dataset.tab;
-  state.page = 1; state.openRow = null;
-  state.sortKey = state.tab==='all' ? 'date' : 'total';
+  state.page = 1; state.selected = null;
+  state.sortKey = state.tab==='all' ? 'date' : 'activity';
   state.sortDir = -1;
   document.getElementById('searchBox').placeholder = state.tab==='all' ? 'Search counterparty or category…' : 'Search counterparty…';
   render();
@@ -367,10 +394,10 @@ document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>{
 document.getElementById('searchBox').addEventListener('input', e=>{ state.search = e.target.value.toLowerCase(); state.page=1; render(); });
 document.getElementById('catFilter').addEventListener('change', e=>{ state.category = e.target.value; state.page=1; render(); });
 
-function renderAggTable(list, direction){
-  let filtered = list.filter(r => r.name.toLowerCase().includes(state.search));
-  const keyMap = {total:'total', count:'count', name:'name', first:'first', last:'last'};
-  const k = keyMap[state.sortKey] || 'total';
+function renderCounterpartyList(){
+  let filtered = counterparties.filter(r => r.name.toLowerCase().includes(state.search));
+  const keyMap = {activity:'activity', count:'count', name:'name', first:'first', last:'last', in:'total_in', out:'total_out'};
+  const k = keyMap[state.sortKey] || 'activity';
   filtered.sort((a,b)=>{
     let av=a[k], bv=b[k];
     if(typeof av==='string') return state.sortDir===1 ? av.localeCompare(bv) : bv.localeCompare(av);
@@ -388,26 +415,23 @@ function renderAggTable(list, direction){
     return;
   }
 
-  const cls = direction==='IN' ? 'in' : 'out';
   let html = `<table><thead><tr>
     <th data-k="name">Counterparty</th>
     <th data-k="count" class="mono">Txns</th>
-    <th data-k="first" class="mono">First</th>
-    <th data-k="last" class="mono">Last</th>
-    <th data-k="total" class="mono" style="text-align:right">Amount</th>
+    <th data-k="last" class="mono">Last activity</th>
+    <th data-k="in" class="mono" style="text-align:right">Money in</th>
+    <th data-k="out" class="mono" style="text-align:right">Money out</th>
   </tr></thead><tbody>`;
   pageRows.forEach(r=>{
-    const pct = (r.total/MAXAGG*100).toFixed(1);
-    html += `<tr class="agg-row" data-name="${encodeURIComponent(r.name)}" data-dir="${direction}">
+    const pctIn = (r.total_in/MAXAGG*100).toFixed(1);
+    const pctOut = (r.total_out/MAXAGG*100).toFixed(1);
+    html += `<tr class="agg-row" data-name="${encodeURIComponent(r.name)}">
       <td class="name">${escapeHtml(r.name)}</td>
       <td class="mono">${r.count}</td>
-      <td class="mono">${fmtDate(r.first)}</td>
       <td class="mono">${fmtDate(r.last)}</td>
-      <td class="amt ${cls}">${fmtAmt(r.total)}<div class="bar ${cls}" style="width:${pct}%"></div></td>
+      <td class="amt in">${r.total_in ? fmtAmt(r.total_in) : '—'}<div class="bar in" style="width:${pctIn}%"></div></td>
+      <td class="amt out">${r.total_out ? fmtAmt(r.total_out) : '—'}<div class="bar out" style="width:${pctOut}%"></div></td>
     </tr>`;
-    if(state.openRow === r.name+'|'+direction){
-      html += drillRow(r.name, direction);
-    }
   });
   html += '</tbody></table>';
   document.getElementById('tableHost').innerHTML = html;
@@ -416,15 +440,68 @@ function renderAggTable(list, direction){
   renderPager(filtered.length);
 }
 
-function drillRow(name, direction){
-  const rows = txns.filter(t=>t.counterparty===name && t.direction===direction)
-                    .sort((a,b)=> (a.date||'')<(b.date||'')?1:-1);
-  let inner = `<table><thead><tr><th>Date</th><th>Category</th><th style="text-align:right">Amount</th><th>Balance after</th></tr></thead><tbody>`;
-  rows.forEach(t=>{
-    inner += `<tr><td>${fmtDate(t.date)}</td><td>${escapeHtml(t.category)}</td><td class="amt">${fmtAmt(t.amount)}</td><td>${fmtAmt(t.balance)}</td></tr>`;
+function renderCounterpartyDetail(name){
+  const rows = txns.filter(t=>t.counterparty===name);
+  const totalIn = rows.filter(t=>t.direction==='IN').reduce((a,t)=>a+t.cr,0);
+  const totalOut = rows.filter(t=>t.direction==='OUT').reduce((a,t)=>a+t.dr,0);
+
+  const keyMap = {date:'date', category:'category', amount:'amount'};
+  const k = keyMap[state.detailSortKey] || 'date';
+  const sorted = [...rows].sort((a,b)=>{
+    let av=a[k]||'', bv=b[k]||'';
+    if(typeof av==='string') return state.detailSortDir===-1 ? bv.localeCompare(av) : av.localeCompare(bv);
+    return state.detailSortDir===-1 ? bv-av : av-bv;
   });
-  inner += '</tbody></table>';
-  return `<tr class="drill"><td colspan="5"><div class="drill-inner">${inner}</div></td></tr>`;
+
+  document.getElementById('tabBar').style.display='none';
+  document.getElementById('countNote').textContent = `${rows.length.toLocaleString('en-IN')} transactions`;
+
+  let html = `
+    <button class="back-link" id="backBtn"><i>&larr;</i> Back to counterparties</button>
+    <div class="detail-header">
+      <h2>${escapeHtml(name)}</h2>
+      <div class="sub-note">Every transaction with this counterparty, both directions</div>
+    </div>
+    <div class="detail-stats">
+      <div class="stat"><div class="label">Money in</div><div class="value in">${fmtAmt(totalIn)}</div></div>
+      <div class="stat"><div class="label">Money out</div><div class="value out">${fmtAmt(totalOut)}</div></div>
+      <div class="stat"><div class="label">Net</div><div class="value ${totalIn-totalOut>=0?'net pos':'net neg'}">${fmtAmt(totalIn-totalOut)}</div></div>
+      <div class="stat"><div class="label">Transactions</div><div class="value">${rows.length}</div></div>
+    </div>
+    <table><thead><tr>
+      <th data-k="date" class="mono">Date</th>
+      <th data-k="category">Category</th>
+      <th>Direction</th>
+      <th data-k="amount" class="mono" style="text-align:right">Amount</th>
+      <th class="mono" style="text-align:right">Balance after</th>
+    </tr></thead><tbody>`;
+  sorted.forEach(t=>{
+    const cls = t.direction==='IN'?'in':(t.direction==='OUT'?'out':'');
+    html += `<tr>
+      <td class="mono">${fmtDate(t.date)}</td>
+      <td>${escapeHtml(t.category)}</td>
+      <td><span class="tag ${t.direction}">${t.direction}</span></td>
+      <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
+      <td class="mono" style="text-align:right">${fmtAmt(t.balance)}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  document.getElementById('tableHost').innerHTML = html;
+  document.getElementById('pager').style.display = 'none';
+
+  document.getElementById('backBtn').addEventListener('click', ()=>{
+    state.view='list'; state.selected=null;
+    document.getElementById('tabBar').style.display='flex';
+    render();
+  });
+  document.querySelectorAll('thead th[data-k]').forEach(th=>{
+    th.addEventListener('click', ()=>{
+      const kk = th.dataset.k;
+      if(state.detailSortKey===kk) state.detailSortDir *= -1; else { state.detailSortKey=kk; state.detailSortDir=-1; }
+      render();
+    });
+    if(th.dataset.k===state.detailSortKey) th.classList.add('sorted');
+  });
 }
 
 function renderAllTable(){
@@ -492,10 +569,9 @@ function attachHeaderSort(){
 function attachRowClicks(){
   document.querySelectorAll('.agg-row').forEach(tr=>{
     tr.addEventListener('click', ()=>{
-      const name = decodeURIComponent(tr.dataset.name);
-      const dir = tr.dataset.dir;
-      const key = name+'|'+dir;
-      state.openRow = state.openRow===key ? null : key;
+      state.view = 'detail';
+      state.selected = decodeURIComponent(tr.dataset.name);
+      state.detailSortKey = 'date'; state.detailSortDir = -1;
       render();
     });
   });
@@ -517,9 +593,16 @@ function renderPager(total){
 }
 
 function render(){
+  if(state.view==='detail'){
+    document.getElementById('catFilter').style.display = 'none';
+    document.querySelector('.controls').style.display = 'none';
+    renderCounterpartyDetail(state.selected);
+    return;
+  }
+  document.getElementById('tabBar').style.display='flex';
+  document.querySelector('.controls').style.display = 'flex';
   document.getElementById('catFilter').style.display = state.tab==='all' ? 'inline-block' : 'none';
-  if(state.tab==='in') renderAggTable(aggIn, 'IN');
-  else if(state.tab==='out') renderAggTable(aggOut, 'OUT');
+  if(state.tab==='counterparties') renderCounterpartyList();
   else renderAllTable();
 }
 </script>
