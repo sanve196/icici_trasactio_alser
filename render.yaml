@@ -1,3 +1,9 @@
+databases:
+  - name: icici-transaction-db
+    plan: free
+    databaseName: icici_transactions
+    user: icici_admin
+
 services:
   - type: web
     name: icici-transaction-analyser
@@ -8,3 +14,7 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: DATABASE_URL
+        fromDatabase:
+          name: icici-transaction-db
+          property: connectionString

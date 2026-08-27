@@ -4,6 +4,7 @@ import os
 from flask import Flask, jsonify, request, send_from_directory
 
 from parser import StatementFormatError, build_summary, parse_workbook
+from db import check_connection
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
@@ -19,6 +20,12 @@ def index():
 @app.get("/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.get("/health/db")
+def health_db():
+    ok, detail = check_connection()
+    return jsonify({"db_connected": ok, "detail": detail}), (200 if ok else 503)
 
 
 @app.post("/api/analyze")

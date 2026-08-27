@@ -37,20 +37,40 @@ python app.py
 
 Visit `http://localhost:5000` and upload a statement.
 
-## Deploying on Render
+## Deploying on Render (with Postgres)
 
-This repo includes a `render.yaml` (Render's "Blueprint" format) and a
-`Procfile` as a fallback.
+This repo includes a `render.yaml` (Render's "Blueprint" format) that
+provisions **both** the web service and a free Postgres database, and wires
+the database's connection string into the web service automatically.
 
 1. Push this repo to GitHub (already done if you're reading this on GitHub).
-2. In Render: **New → Blueprint**, connect this repo, and Render will pick
-   up `render.yaml` automatically (build: `pip install -r requirements.txt`,
-   start: `gunicorn app:app`).
-   - Alternatively, **New → Web Service**, connect the repo, set:
-     - Build Command: `pip install -r requirements.txt`
-     - Start Command: `gunicorn app:app`
-3. Deploy. Render assigns a public URL — the app is stateless, so no
-   database or persistent disk is needed.
+2. In the Render dashboard: **New → Blueprint**.
+3. Connect your GitHub account (if not already) and select this repo
+   (`icici_trasactio_alser`).
+4. Render reads `render.yaml` and shows a preview of two resources:
+   - `icici-transaction-db` (Postgres, free plan)
+   - `icici-transaction-analyser` (web service, free plan)
+5. Click **Apply**. Render creates the database first, then builds and
+   deploys the web service with `DATABASE_URL` already set as an
+   environment variable — you don't need to copy/paste it anywhere.
+6. Once both show "Live", open the web service's URL and confirm:
+   - `/health` → `{"status": "ok"}`
+   - `/health/db` → `{"db_connected": true, "detail": "connected"}`
+     (this confirms the app can actually reach Postgres)
+
+At this stage the database is provisioned and reachable, but the app
+doesn't store anything in it yet — uploads are still parsed in-memory only.
+Actual tables and persistence are a separate, later step.
+
+### If you'd rather set it up by hand instead of via Blueprint
+
+1. **New → PostgreSQL** → name it, free plan → create.
+2. **New → Web Service** → connect this repo.
+   - Build Command: `pip install -r requirements.txt`
+   - Start Command: `gunicorn app:app`
+3. On the web service's **Environment** tab, add `DATABASE_URL` and paste
+   the "Internal Connection String" from the Postgres instance's page.
+4. Deploy, then check `/health/db` as above.
 
 ## Notes & limitations
 
