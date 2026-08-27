@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 <style>
   :root{
     --bg1:#FFF6EC;
@@ -196,6 +198,10 @@
     display:inline-flex;align-items:center;gap:6px;white-space:nowrap;
   }
   .export-btn:hover{transform:translateY(-1px);}
+  .export-btn.outline{
+    background:var(--glass-strong);color:var(--orange-dark);
+    box-shadow:none;border:1px solid rgba(245,130,31,0.4);
+  }
 
   .table-card{
     background:var(--glass);
@@ -335,6 +341,7 @@
       <input type="date" id="dateFrom" style="display:none" />
       <input type="date" id="dateTo" style="display:none" />
       <button class="export-btn" id="exportBtn" style="display:none">Export to Excel</button>
+      <button class="export-btn outline" id="exportPdfBtn" style="display:none">Export to PDF</button>
       <span class="count-note" id="countNote"></span>
     </div>
 
@@ -414,7 +421,7 @@ async function handleFile(file){
       return;
     }
     showScreen('results');
-    initApp(data.transactions, data.summary);
+    initApp(data.transactions, data.summary, data);
   }catch(err){
     loadingBox.style.display = 'none';
     showScreen('upload');
@@ -498,7 +505,7 @@ async function openStatement(id){
       return;
     }
     showScreen('results');
-    initApp(data.transactions, data.summary);
+    initApp(data.transactions, data.summary, data);
   }catch(err){
     loadingBox.style.display = 'none';
     showScreen('history');
@@ -527,7 +534,14 @@ function mergeCounterparties(payers, payees){
   return list.sort((a,b)=>b.activity-a.activity);
 }
 
-function initApp(transactions, summary){
+let currentMeta = {filename:'', account_no:'', account_name:''};
+
+function initApp(transactions, summary, meta){
+  currentMeta = {
+    filename: meta && meta.filename || '',
+    account_no: meta && meta.account_no || '',
+    account_name: meta && meta.account_name || ''
+  };
   txns = transactions.map(t => ({...t, amount: t.direction==='IN' ? t.cr : t.dr}));
   counterparties = mergeCounterparties(summary.payers, summary.payees);
   MAXAGG = Math.max(1, ...counterparties.map(a=>a.activity));
@@ -598,6 +612,10 @@ document.getElementById('dateTo').addEventListener('change', e=>{
 document.getElementById('exportBtn').addEventListener('click', ()=>{
   const rows = getFilteredAllTransactions();
   exportTransactionsToExcel(rows, 'transactions');
+});
+document.getElementById('exportPdfBtn').addEventListener('click', ()=>{
+  const rows = getFilteredAllTransactions();
+  exportTransactionsToPDF(rows, 'transactions', 'All transactions report');
 });
 
 function renderCounterpartyList(){
@@ -677,6 +695,7 @@ function renderCounterpartyDetail(name){
           <option value="asc" ${state.detailSortKey==='date' && state.detailSortDir===1 ? 'selected':''}>Oldest first</option>
         </select>
         <button class="export-btn" id="detailExportBtn">Export to Excel</button>
+        <button class="export-btn outline" id="detailExportPdfBtn">Export to PDF</button>
       </div>
     </div>
     <div class="detail-stats">
@@ -718,6 +737,9 @@ function renderCounterpartyDetail(name){
   });
   document.getElementById('detailExportBtn').addEventListener('click', ()=>{
     exportTransactionsToExcel(sorted, name.replace(/[^a-z0-9]+/gi,'_'));
+  });
+  document.getElementById('detailExportPdfBtn').addEventListener('click', ()=>{
+    exportTransactionsToPDF(sorted, name.replace(/[^a-z0-9]+/gi,'_'), `Transactions with ${name}`);
   });
 
   document.getElementById('backBtn').addEventListener('click', ()=>{
@@ -779,6 +801,49 @@ function exportTransactionsToExcel(rows, filenamePrefix){
   XLSX.utils.book_append_sheet(wb, ws, 'Transactions');
   const stamp = new Date().toISOString().slice(0,10);
   XLSX.writeFile(wb, `${filenamePrefix}_${stamp}.xlsx`);
+}
+
+function exportTransactionsToPDF(rows, filenamePrefix, reportTitle){
+  if(!rows || rows.length===0){
+    alert('No transactions match the current filters — nothing to export.');
+    return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+
+  const totalIn = rows.filter(t=>t.direction==='IN').reduce((a,t)=>a+(t.cr||0),0);
+  const totalOut = rows.filter(t=>t.direction==='OUT').reduce((a,t)=>a+(t.dr||0),0);
+
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(15);
+  doc.setTextColor(35,38,47);
+  doc.text(reportTitle || 'Transaction report', 40, 40);
+
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(9);
+  doc.setTextColor(122,127,138);
+  const acctLine = [currentMeta.account_name, currentMeta.account_no].filter(Boolean).join(' · ');
+  let y = 58;
+  if(acctLine){ doc.text(`Account: ${acctLine}`, 40, y); y += 14; }
+  if(currentMeta.filename){ doc.text(`Source file: ${currentMeta.filename}`, 40, y); y += 14; }
+  doc.text(`Generated: ${new Date().toLocaleString('en-IN')}`, 40, y); y += 14;
+  doc.text(`${rows.length.toLocaleString('en-IN')} transactions — Money in: ${fmtAmt(totalIn)}  ·  Money out: ${fmtAmt(totalOut)}`, 40, y);
+  y += 14;
+
+  doc.autoTable({
+    startY: y,
+    head: [['Date','Category','Counterparty','Direction','Amount','Balance']],
+    body: rows.map(t=>[
+      fmtDate(t.date), t.category, t.counterparty, t.direction, fmtAmt(t.amount), fmtAmt(t.balance)
+    ]),
+    styles: { fontSize: 8, textColor: [35,38,47] },
+    headStyles: { fillColor: [245,130,31], textColor: [255,255,255], fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [255,246,236] },
+    margin: { left: 40, right: 40 },
+  });
+
+  const stamp = new Date().toISOString().slice(0,10);
+  doc.save(`${filenamePrefix}_${stamp}.pdf`);
 }
 
 function renderAllTable(){
@@ -866,6 +931,7 @@ function render(){
     document.getElementById('dateFrom').style.display = 'none';
     document.getElementById('dateTo').style.display = 'none';
     document.getElementById('exportBtn').style.display = 'none';
+    document.getElementById('exportPdfBtn').style.display = 'none';
     document.querySelector('.controls').style.display = 'none';
     renderCounterpartyDetail(state.selected);
     return;
@@ -883,6 +949,7 @@ function render(){
   document.getElementById('dateFrom').style.display = isAll ? 'inline-block' : 'none';
   document.getElementById('dateTo').style.display = isAll ? 'inline-block' : 'none';
   document.getElementById('exportBtn').style.display = isAll ? 'inline-flex' : 'none';
+  document.getElementById('exportPdfBtn').style.display = isAll ? 'inline-flex' : 'none';
   if(isAll && state.sortKey==='date'){
     dateSortEl.value = state.sortDir===-1 ? 'desc' : 'asc';
   }
