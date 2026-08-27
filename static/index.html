@@ -197,7 +197,7 @@
   }
   .export-btn:hover{transform:translateY(-1px);}
 
-  #tableHost{
+  .table-card{
     background:var(--glass);
     -webkit-backdrop-filter:blur(20px) saturate(160%);
     backdrop-filter:blur(20px) saturate(160%);
@@ -207,6 +207,11 @@
     box-shadow:0 8px 28px rgba(217,99,26,0.08);
     overflow:hidden;
   }
+  .history-panel{padding:20px 22px;margin-bottom:26px;}
+  .history-panel .heading{
+    font-family:'Poppins',sans-serif;font-weight:600;font-size:15px;color:var(--ink);margin-bottom:14px;
+  }
+  .hist-row td.name{font-weight:500;}
   table{width:100%;border-collapse:collapse;}
   thead th{
     text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;
@@ -283,10 +288,15 @@
   </div>
 
   <div class="upload-panel" id="uploadPanel">
-    <p>Drop your bank statement export here, or choose a file.<br>The file is parsed in this browser session only and is not stored anywhere.</p>
+    <p>Drop your bank statement export here, or choose a file.<br>The file is parsed once and saved, so you can reopen it later without re-uploading.</p>
     <label class="upload-btn" for="fileInput">Choose .xlsx file</label>
     <input type="file" id="fileInput" accept=".xlsx" />
     <div class="file-hint">Expected columns: Ac_No, AC_Name, Tran_ID, Tran_Date, Inst_Type, Inst_Num, Dr_Amt, Cr_Amt, Balance, Narration, pstd_dt</div>
+  </div>
+
+  <div class="glass history-panel" id="historyPanel">
+    <div class="heading">Previously analysed statements</div>
+    <div id="historyList" class="table-card"><div class="empty">Loading…</div></div>
   </div>
 
   <div class="error-box" id="errorBox"></div>
@@ -317,7 +327,7 @@
       <span class="count-note" id="countNote"></span>
     </div>
 
-    <div id="tableHost"></div>
+    <div id="tableHost" class="table-card"></div>
     <div class="pager" id="pager" style="display:none"></div>
 
     <div class="note">
@@ -333,6 +343,7 @@
 <script>
 const fileInput = document.getElementById('fileInput');
 const uploadPanel = document.getElementById('uploadPanel');
+const historyPanel = document.getElementById('historyPanel');
 const errorBox = document.getElementById('errorBox');
 const loadingBox = document.getElementById('loadingBox');
 const appBody = document.getElementById('appBody');
@@ -354,8 +365,10 @@ fileInput.addEventListener('change', e=>{
 document.getElementById('resetBtn').addEventListener('click', ()=>{
   appBody.style.display = 'none';
   uploadPanel.style.display = 'block';
+  historyPanel.style.display = 'block';
   errorBox.style.display = 'none';
   fileInput.value = '';
+  loadHistory();
 });
 
 function showError(msg){
@@ -368,6 +381,7 @@ async function handleFile(file){
   errorBox.style.display = 'none';
   loadingBox.style.display = 'block';
   uploadPanel.style.display = 'none';
+  historyPanel.style.display = 'none';
   appBody.style.display = 'none';
 
   const form = new FormData();
@@ -379,6 +393,7 @@ async function handleFile(file){
     if(!res.ok){
       showError(data.error || 'Something went wrong while parsing this file.');
       uploadPanel.style.display = 'block';
+      historyPanel.style.display = 'block';
       return;
     }
     loadingBox.style.display = 'none';
@@ -387,6 +402,7 @@ async function handleFile(file){
   }catch(err){
     showError('Could not reach the server. Please try again.');
     uploadPanel.style.display = 'block';
+    historyPanel.style.display = 'block';
   }
 }
 
@@ -407,6 +423,74 @@ function fmtDate(iso){
 }
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function loadHistory(){
+  const host = document.getElementById('historyList');
+  host.innerHTML = '<div class="empty">Loading…</div>';
+  try{
+    const res = await fetch('/api/statements');
+    const data = await res.json();
+    if(!res.ok){
+      host.innerHTML = '<div class="empty">Statement history isn\'t available right now.</div>';
+      return;
+    }
+    const rows = data.statements || [];
+    if(rows.length===0){
+      host.innerHTML = '<div class="empty">No statements analysed yet — upload one above.</div>';
+      return;
+    }
+    let html = `<table><thead><tr>
+      <th>File</th><th>Account</th><th>Period</th>
+      <th class="mono" style="text-align:right">In</th>
+      <th class="mono" style="text-align:right">Out</th>
+      <th></th>
+    </tr></thead><tbody>`;
+    rows.forEach(r=>{
+      const acct = [r.account_name, r.account_no].filter(Boolean).join(' · ') || '—';
+      html += `<tr class="hist-row" data-id="${r.id}">
+        <td class="name">${escapeHtml(r.filename)}</td>
+        <td>${escapeHtml(acct)}</td>
+        <td class="mono">${fmtDate(r.period_start)} &ndash; ${fmtDate(r.period_end)}</td>
+        <td class="amt in">${fmtAmt(r.total_in)}</td>
+        <td class="amt out">${fmtAmt(r.total_out)}</td>
+        <td style="text-align:right;color:var(--orange-dark);font-weight:600;">View &rarr;</td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    host.innerHTML = html;
+    document.querySelectorAll('.hist-row').forEach(tr=>{
+      tr.addEventListener('click', ()=> openStatement(tr.dataset.id));
+    });
+  }catch(err){
+    host.innerHTML = '<div class="empty">Statement history isn\'t available right now.</div>';
+  }
+}
+
+async function openStatement(id){
+  errorBox.style.display = 'none';
+  loadingBox.style.display = 'block';
+  uploadPanel.style.display = 'none';
+  historyPanel.style.display = 'none';
+  appBody.style.display = 'none';
+
+  try{
+    const res = await fetch(`/api/statements/${id}`);
+    const data = await res.json();
+    if(!res.ok){
+      showError(data.error || 'Could not load that statement.');
+      uploadPanel.style.display = 'block';
+      historyPanel.style.display = 'block';
+      return;
+    }
+    loadingBox.style.display = 'none';
+    appBody.style.display = 'block';
+    initApp(data.transactions, data.summary);
+  }catch(err){
+    showError('Could not reach the server. Please try again.');
+    uploadPanel.style.display = 'block';
+    historyPanel.style.display = 'block';
+  }
 }
 
 function mergeCounterparties(payers, payees){
@@ -792,6 +876,8 @@ function render(){
   if(state.tab==='counterparties') renderCounterpartyList();
   else renderAllTable();
 }
+
+loadHistory();
 </script>
 </body>
 </html>

@@ -111,7 +111,8 @@ def parse_narration(narration, dr, cr):
 def parse_workbook(file_stream):
     """
     Parse an uploaded ICICI SOA .xlsx file (a file-like object) into a list of
-    transaction dicts. Raises StatementFormatError if the expected columns
+    transaction dicts, plus a small dict of account info (account_no, account_name)
+    read off the data rows. Raises StatementFormatError if the expected columns
     aren't found.
     """
     wb = openpyxl.load_workbook(file_stream, data_only=True, read_only=True)
@@ -128,10 +129,18 @@ def parse_workbook(file_stream):
             f"Missing expected column(s): {', '.join(missing)}."
         )
 
+    account_info = {"account_no": None, "account_name": None}
     results = []
     for row in ws.iter_rows(min_row=2, values_only=True):
         if row is None or all(v is None for v in row):
             continue
+        if account_info["account_no"] is None:
+            ac_no = row[col_index["Ac_No"]]
+            ac_name = row[col_index["AC_Name"]]
+            if ac_no is not None:
+                account_info["account_no"] = str(ac_no)
+            if ac_name is not None:
+                account_info["account_name"] = str(ac_name)
         tran_date = row[col_index["Tran_Date"]]
         dr = row[col_index["Dr_Amt"]] or 0
         cr = row[col_index["Cr_Amt"]] or 0
@@ -166,7 +175,7 @@ def parse_workbook(file_stream):
     if not results:
         raise StatementFormatError("No transaction rows were found in this file.")
 
-    return results
+    return results, account_info
 
 
 def build_summary(transactions):
