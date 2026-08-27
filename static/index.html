@@ -287,9 +287,6 @@
     <div>
       <div class="eyebrow">Transaction Analyser</div>
       <h1>Who paid whom, and how much</h1>
-      <div class="sub">
-        <span>Upload an ICICI Statement of Account (.xlsx) to see every counterparty and their transactions</span>
-      </div>
     </div>
   </div>
 
@@ -298,10 +295,10 @@
 
   <div id="screenUpload">
     <div class="upload-panel" id="uploadPanel">
-      <p>Drop your bank statement export here, or choose a file.<br>The file is parsed once and saved, so you can reopen it later without re-uploading.</p>
+      <p>Drop your ICICI bank statement here, or choose a file.</p>
       <label class="upload-btn" for="fileInput">Choose .xlsx file</label>
       <input type="file" id="fileInput" accept=".xlsx" />
-      <div class="file-hint">Expected columns: Ac_No, AC_Name, Tran_ID, Tran_Date, Inst_Type, Inst_Num, Dr_Amt, Cr_Amt, Balance, Narration, pstd_dt</div>
+      <div class="file-hint">Works with ICICI savings and current account statements exported as Excel (.xlsx)</div>
     </div>
     <div style="text-align:center;margin-top:16px;">
       <button class="reset-link" id="viewHistoryLink">View previously analysed statements</button>
