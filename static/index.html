@@ -429,6 +429,7 @@ async function handleFile(file){
 // ---- app logic (operates on data returned by the API) ----
 let txns = [];
 let counterparties = []; // merged, both directions
+let counterpartyCategories = new Map(); // name -> Set of categories seen for that counterparty
 let MAXAGG = 1;
 let state = { view:'list', tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1 };
 
@@ -541,6 +542,11 @@ function initApp(transactions, summary, meta){
   };
   txns = transactions.map(t => ({...t, amount: t.direction==='IN' ? t.cr : t.dr}));
   counterparties = mergeCounterparties(summary.payers, summary.payees);
+  counterpartyCategories = new Map();
+  txns.forEach(t=>{
+    if(!counterpartyCategories.has(t.counterparty)) counterpartyCategories.set(t.counterparty, new Set());
+    counterpartyCategories.get(t.counterparty).add(t.category);
+  });
   MAXAGG = Math.max(1, ...counterparties.map(a=>a.activity));
 
   const stats = [
@@ -567,6 +573,8 @@ function initApp(transactions, summary, meta){
   document.getElementById('amountMax').value = '';
   document.getElementById('dateFrom').value = '';
   document.getElementById('dateTo').value = '';
+  document.getElementById('catFilter').value = '';
+  document.getElementById('amountLabel').textContent = 'Total activity';
   render();
 }
 
@@ -578,6 +586,14 @@ document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>{
   state.page = 1; state.selected = null;
   state.sortKey = state.tab==='all' ? 'date' : 'activity';
   state.sortDir = -1;
+  state.search = ''; state.category = ''; state.amountMin = null; state.amountMax = null; state.dateFrom = null; state.dateTo = null;
+  document.getElementById('searchBox').value = '';
+  document.getElementById('catFilter').value = '';
+  document.getElementById('amountMin').value = '';
+  document.getElementById('amountMax').value = '';
+  document.getElementById('dateFrom').value = '';
+  document.getElementById('dateTo').value = '';
+  document.getElementById('amountLabel').textContent = state.tab==='all' ? 'Amount' : 'Total activity';
   document.getElementById('searchBox').placeholder = state.tab==='all' ? 'Search counterparty or category…' : 'Search counterparty…';
   render();
 }));
@@ -585,7 +601,7 @@ document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>{
 document.getElementById('searchBox').addEventListener('input', e=>{ state.search = e.target.value.toLowerCase(); state.page=1; render(); });
 document.getElementById('catFilter').addEventListener('change', e=>{ state.category = e.target.value; state.page=1; render(); });
 document.getElementById('dateSort').addEventListener('change', e=>{
-  state.sortKey = 'date';
+  state.sortKey = state.tab==='all' ? 'date' : 'last';
   state.sortDir = e.target.value==='desc' ? -1 : 1;
   state.page = 1;
   render();
@@ -607,16 +623,41 @@ document.getElementById('dateTo').addEventListener('change', e=>{
   state.page = 1; render();
 });
 document.getElementById('exportBtn').addEventListener('click', ()=>{
-  const rows = getFilteredAllTransactions();
-  exportTransactionsToExcel(rows, 'transactions');
+  if(state.tab==='all'){
+    exportTransactionsToExcel(getFilteredAllTransactions(), 'transactions');
+  }else{
+    exportCounterpartiesToExcel(getFilteredCounterparties(), 'counterparties');
+  }
 });
 document.getElementById('exportPdfBtn').addEventListener('click', ()=>{
-  const rows = getFilteredAllTransactions();
-  exportTransactionsToPDF(rows, 'transactions', 'All transactions report');
+  if(state.tab==='all'){
+    exportTransactionsToPDF(getFilteredAllTransactions(), 'transactions', 'All transactions report');
+  }else{
+    exportCounterpartiesToPDF(getFilteredCounterparties(), 'counterparties', 'Counterparties report');
+  }
 });
 
-function renderCounterpartyList(){
+function getFilteredCounterparties(){
   let filtered = counterparties.filter(r => r.name.toLowerCase().includes(state.search));
+
+  if(state.category){
+    filtered = filtered.filter(r=>{
+      const cats = counterpartyCategories.get(r.name);
+      return cats && cats.has(state.category);
+    });
+  }
+  if(state.dateFrom || state.dateTo){
+    const activeSet = new Set();
+    txns.forEach(t=>{
+      if(state.dateFrom && (!t.date || t.date < state.dateFrom)) return;
+      if(state.dateTo && (!t.date || t.date > state.dateTo)) return;
+      activeSet.add(t.counterparty);
+    });
+    filtered = filtered.filter(r => activeSet.has(r.name));
+  }
+  if(state.amountMin!=null) filtered = filtered.filter(r => r.activity >= state.amountMin);
+  if(state.amountMax!=null) filtered = filtered.filter(r => r.activity <= state.amountMax);
+
   const keyMap = {activity:'activity', count:'count', name:'name', first:'first', last:'last', in:'total_in', out:'total_out'};
   const k = keyMap[state.sortKey] || 'activity';
   filtered.sort((a,b)=>{
@@ -624,6 +665,74 @@ function renderCounterpartyList(){
     if(typeof av==='string') return state.sortDir===1 ? av.localeCompare(bv) : bv.localeCompare(av);
     return state.sortDir===1 ? av-bv : bv-av;
   });
+  return filtered;
+}
+
+function exportCounterpartiesToExcel(rows, filenamePrefix){
+  if(!rows || rows.length===0){
+    alert('No counterparties match the current filters — nothing to export.');
+    return;
+  }
+  const data = rows.map(r=>({
+    Counterparty: r.name,
+    Transactions: r.count,
+    'First activity': r.first || '',
+    'Last activity': r.last || '',
+    'Money in': r.total_in || 0,
+    'Money out': r.total_out || 0
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [{wch:30},{wch:12},{wch:14},{wch:14},{wch:16},{wch:16}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Counterparties');
+  const stamp = new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, `${filenamePrefix}_${stamp}.xlsx`);
+}
+
+function exportCounterpartiesToPDF(rows, filenamePrefix, reportTitle){
+  if(!rows || rows.length===0){
+    alert('No counterparties match the current filters — nothing to export.');
+    return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(15);
+  doc.setTextColor(35,38,47);
+  doc.text(reportTitle || 'Counterparties report', 40, 40);
+
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(9);
+  doc.setTextColor(122,127,138);
+  const acctLine = [currentMeta.account_name, currentMeta.account_no].filter(Boolean).join(' · ');
+  let y = 58;
+  if(acctLine){ doc.text(`Account: ${acctLine}`, 40, y); y += 14; }
+  if(currentMeta.filename){ doc.text(`Source file: ${currentMeta.filename}`, 40, y); y += 14; }
+  doc.text(`Generated: ${new Date().toLocaleString('en-IN')}`, 40, y); y += 14;
+  doc.text(`${rows.length.toLocaleString('en-IN')} counterparties`, 40, y);
+  y += 14;
+
+  doc.autoTable({
+    startY: y,
+    head: [['Counterparty','Txns','First activity','Last activity','Money in','Money out']],
+    body: rows.map(r=>[
+      r.name, r.count, fmtDate(r.first), fmtDate(r.last),
+      r.total_in ? fmtAmt(r.total_in) : '—',
+      r.total_out ? fmtAmt(r.total_out) : '—'
+    ]),
+    styles: { fontSize: 8, textColor: [35,38,47] },
+    headStyles: { fillColor: [245,130,31], textColor: [255,255,255], fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [255,246,236] },
+    margin: { left: 40, right: 40 },
+  });
+
+  const stamp = new Date().toISOString().slice(0,10);
+  doc.save(`${filenamePrefix}_${stamp}.pdf`);
+}
+
+function renderCounterpartyList(){
+  let filtered = getFilteredCounterparties();
 
   document.getElementById('countNote').textContent = `${filtered.length.toLocaleString('en-IN')} counterparties`;
 
@@ -631,7 +740,7 @@ function renderCounterpartyList(){
   const pageRows = filtered.slice(start, start+state.pageSize);
 
   if(pageRows.length===0){
-    document.getElementById('tableHost').innerHTML = `<div class="empty">No counterparties match "${escapeHtml(state.search)}".</div>`;
+    document.getElementById('tableHost').innerHTML = `<div class="empty">No counterparties match your filters.</div>`;
     document.getElementById('pager').style.display='none';
     return;
   }
@@ -935,19 +1044,19 @@ function render(){
   }
   document.getElementById('tabBar').style.display='flex';
   document.querySelector('.controls').style.display = 'flex';
-  const isAll = state.tab==='all';
-  document.getElementById('catFilter').style.display = isAll ? 'inline-block' : 'none';
+  document.getElementById('catFilter').style.display = 'inline-block';
   const dateSortEl = document.getElementById('dateSort');
-  dateSortEl.style.display = isAll ? 'inline-block' : 'none';
-  document.getElementById('amountLabel').style.display = isAll ? 'inline' : 'none';
-  document.getElementById('amountMin').style.display = isAll ? 'inline-block' : 'none';
-  document.getElementById('amountMax').style.display = isAll ? 'inline-block' : 'none';
-  document.getElementById('dateLabel').style.display = isAll ? 'inline' : 'none';
-  document.getElementById('dateFrom').style.display = isAll ? 'inline-block' : 'none';
-  document.getElementById('dateTo').style.display = isAll ? 'inline-block' : 'none';
-  document.getElementById('exportBtn').style.display = isAll ? 'inline-flex' : 'none';
-  document.getElementById('exportPdfBtn').style.display = isAll ? 'inline-flex' : 'none';
-  if(isAll && state.sortKey==='date'){
+  dateSortEl.style.display = 'inline-block';
+  document.getElementById('amountLabel').style.display = 'inline';
+  document.getElementById('amountMin').style.display = 'inline-block';
+  document.getElementById('amountMax').style.display = 'inline-block';
+  document.getElementById('dateLabel').style.display = 'inline';
+  document.getElementById('dateFrom').style.display = 'inline-block';
+  document.getElementById('dateTo').style.display = 'inline-block';
+  document.getElementById('exportBtn').style.display = 'inline-flex';
+  document.getElementById('exportPdfBtn').style.display = 'inline-flex';
+  const sortKeyForDate = state.tab==='all' ? 'date' : 'last';
+  if(state.sortKey===sortKeyForDate){
     dateSortEl.value = state.sortDir===-1 ? 'desc' : 'asc';
   }
   if(state.tab==='counterparties') renderCounterpartyList();
