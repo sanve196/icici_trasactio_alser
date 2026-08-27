@@ -3,13 +3,17 @@ Parses an ICICI Statement of Account (SOA) export and extracts, per transaction,
 a best-effort counterparty name/UPI-id and a transaction category, by reading the
 bank's free-text Narration field.
 
-Expected input: an .xlsx file with a header row containing at least these columns
-(case-sensitive, matching ICICI's export format):
+Accepts both modern (.xlsx) and legacy (.xls) Excel exports — the actual format
+is detected from the file's contents, not its filename extension.
+
+Expected input: a header row containing at least these columns (case-sensitive,
+matching ICICI's export format):
     Ac_No, AC_Name, Tran_ID, Tran_Date, Inst_Type, Inst_Num,
     Dr_Amt, Cr_Amt, Balance, Narration, pstd_dt
 """
 from datetime import datetime
 import openpyxl
+import xlrd
 
 REQUIRED_COLUMNS = [
     "Ac_No", "AC_Name", "Tran_ID", "Tran_Date", "Inst_Type", "Inst_Num",
@@ -26,6 +30,9 @@ EXCLUDE_CATEGORIES_FROM_COUNTERPARTY_VIEWS = {
     "Cash Deposit",
 }
 
+XLSX_MAGIC = b"PK\x03\x04"      # zip-based: .xlsx / .xlsm
+XLS_MAGIC = b"\xd0\xcf\x11\xe0"  # OLE2-based: legacy .xls
+
 
 class StatementFormatError(ValueError):
     """Raised when the uploaded file doesn't look like a supported ICICI SOA export."""
@@ -35,6 +42,52 @@ def _clean_name(s):
     if not s:
         return ""
     return s.strip(" -/.")
+
+
+def _detect_excel_format(file_stream):
+    """Sniff the first bytes to tell modern (.xlsx) from legacy (.xls) Excel files."""
+    header = file_stream.read(8)
+    file_stream.seek(0)
+    if header.startswith(XLSX_MAGIC):
+        return "xlsx"
+    if header.startswith(XLS_MAGIC):
+        return "xls"
+    return None
+
+
+def _rows_from_xlsx(file_stream):
+    """Yield (header_row, data_row_iterator) for a modern .xlsx/.xlsm file."""
+    wb = openpyxl.load_workbook(file_stream, data_only=True, read_only=True)
+    ws = wb.active
+    rows_iter = ws.iter_rows(values_only=True)
+    header_row = next(rows_iter)
+    return header_row, rows_iter
+
+
+def _rows_from_xls(file_stream):
+    """Yield (header_row, data_row_iterator) for a legacy .xls file, via xlrd."""
+    wb = xlrd.open_workbook(file_contents=file_stream.read())
+    ws = wb.sheet_by_index(0)
+    datemode = wb.datemode
+
+    def cell_value(r, c):
+        cell = ws.cell(r, c)
+        if cell.ctype == xlrd.XL_CELL_DATE:
+            try:
+                return xlrd.xldate_as_datetime(cell.value, datemode)
+            except (xlrd.XLDateError, ValueError):
+                return cell.value
+        if cell.ctype == xlrd.XL_CELL_EMPTY:
+            return None
+        return cell.value
+
+    header_row = [cell_value(0, c) for c in range(ws.ncols)]
+
+    def data_rows():
+        for r in range(1, ws.nrows):
+            yield [cell_value(r, c) for c in range(ws.ncols)]
+
+    return header_row, data_rows()
 
 
 def parse_narration(narration, dr, cr):
@@ -110,15 +163,23 @@ def parse_narration(narration, dr, cr):
 
 def parse_workbook(file_stream):
     """
-    Parse an uploaded ICICI SOA .xlsx file (a file-like object) into a list of
-    transaction dicts, plus a small dict of account info (account_no, account_name)
-    read off the data rows. Raises StatementFormatError if the expected columns
-    aren't found.
+    Parse an uploaded ICICI SOA Excel file (a file-like object; .xlsx or legacy .xls,
+    detected automatically) into a list of transaction dicts, plus a small dict of
+    account info (account_no, account_name) read off the data rows. Raises
+    StatementFormatError if the file isn't a recognized Excel format, or the
+    expected columns aren't found.
     """
-    wb = openpyxl.load_workbook(file_stream, data_only=True, read_only=True)
-    ws = wb.active
+    fmt = _detect_excel_format(file_stream)
+    if fmt == "xlsx":
+        header_row, data_rows = _rows_from_xlsx(file_stream)
+    elif fmt == "xls":
+        header_row, data_rows = _rows_from_xls(file_stream)
+    else:
+        raise StatementFormatError(
+            "This file doesn't look like a valid Excel file (.xlsx or .xls). "
+            "Please upload the original statement export from ICICI, unmodified."
+        )
 
-    header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
     header = [str(h).strip() if h else "" for h in header_row]
     col_index = {name: idx for idx, name in enumerate(header)}
 
@@ -131,14 +192,17 @@ def parse_workbook(file_stream):
 
     account_info = {"account_no": None, "account_name": None}
     results = []
-    for row in ws.iter_rows(min_row=2, values_only=True):
+    for row in data_rows:
         if row is None or all(v is None for v in row):
             continue
         if account_info["account_no"] is None:
             ac_no = row[col_index["Ac_No"]]
             ac_name = row[col_index["AC_Name"]]
             if ac_no is not None:
-                account_info["account_no"] = str(ac_no)
+                if isinstance(ac_no, float) and ac_no.is_integer():
+                    account_info["account_no"] = str(int(ac_no))
+                else:
+                    account_info["account_no"] = str(ac_no)
             if ac_name is not None:
                 account_info["account_name"] = str(ac_name)
         tran_date = row[col_index["Tran_Date"]]
@@ -154,9 +218,9 @@ def parse_workbook(file_stream):
         if isinstance(tran_date, datetime):
             date_iso = tran_date.strftime("%Y-%m-%d")
         elif isinstance(tran_date, str):
-            for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"):
+            for fmt_str in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"):
                 try:
-                    date_iso = datetime.strptime(tran_date, fmt).strftime("%Y-%m-%d")
+                    date_iso = datetime.strptime(tran_date, fmt_str).strftime("%Y-%m-%d")
                     break
                 except ValueError:
                     continue

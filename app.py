@@ -43,8 +43,8 @@ def analyze():
     upload = request.files["file"]
     if not upload.filename:
         return jsonify({"error": "No file selected."}), 400
-    if not upload.filename.lower().endswith(".xlsx"):
-        return jsonify({"error": "Please upload an .xlsx file."}), 400
+    if not upload.filename.lower().endswith((".xlsx", ".xls")):
+        return jsonify({"error": "Please upload an .xlsx or .xls file."}), 400
 
     try:
         data = io.BytesIO(upload.read())
