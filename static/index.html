@@ -313,6 +313,11 @@
       </div>
       <div id="historyList" class="table-card"><div class="empty">Loading…</div></div>
     </div>
+
+    <div class="glass history-panel">
+      <div class="heading">Bulk uploads</div>
+      <div id="batchList" class="table-card"><div class="empty">Loading…</div></div>
+    </div>
   </div>
 
   <div id="screenBulk" style="display:none;">
@@ -332,13 +337,24 @@
 
     <div class="controls">
       <input class="search" type="text" id="bulkSearchBox" placeholder="Search counterparty…" />
-      <select id="bulkCatFilter" style="display:none"><option value="">All categories</option></select>
+      <select id="bulkCatFilter"><option value="">All categories</option></select>
+      <select id="bulkDateSort">
+        <option value="desc">Newest first</option>
+        <option value="asc">Oldest first</option>
+      </select>
+      <span class="filter-label" id="bulkAmountLabel">Total activity</span>
+      <input type="number" id="bulkAmountMin" placeholder="Min ₹" />
+      <input type="number" id="bulkAmountMax" placeholder="Max ₹" />
+      <span class="filter-label">Date</span>
+      <input type="date" id="bulkDateFrom" />
+      <input type="date" id="bulkDateTo" />
       <button class="export-btn" id="bulkExportBtn">Export to Excel</button>
       <button class="export-btn outline" id="bulkExportPdfBtn">Export to PDF</button>
       <span class="count-note" id="bulkCountNote"></span>
     </div>
 
     <div id="bulkTableHost" class="table-card"></div>
+    <div class="pager" id="bulkPager" style="display:none"></div>
   </div>
 
   <div id="screenBulkDetail" style="display:none;">
@@ -361,7 +377,7 @@
       <button class="tab" data-tab="all">All Transactions</button>
     </div>
 
-    <div class="controls">
+    <div class="controls" id="mainControls">
       <input class="search" type="text" id="searchBox" placeholder="Search counterparty…" />
       <select id="catFilter" style="display:none"><option value="">All categories</option></select>
       <select id="dateSort" style="display:none">
@@ -519,7 +535,7 @@ let state = { view:'list', tab:'counterparties', search:'', category:'', amountM
 let bulkTxns = [];
 let bulkCounterparties = [];
 let bulkFilesList = [];
-let bulkState = { tab:'counterparties', search:'', category:'', page:1, pageSize:50, selected:null };
+let bulkState = { tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null };
 
 function fmtAmt(n){
   if(n===null||n===undefined) return '—';
@@ -542,25 +558,67 @@ async function loadHistory(){
     const data = await res.json();
     if(!res.ok){
       host.innerHTML = '<div class="empty">Statement history isn\'t available right now.</div>';
+    }else{
+      const rows = data.statements || [];
+      if(rows.length===0){
+        host.innerHTML = '<div class="empty">No statements analysed yet — upload one above.</div>';
+      }else{
+        let html = `<table><thead><tr>
+          <th>File</th><th>Account</th><th>Period</th>
+          <th class="mono" style="text-align:right">In</th>
+          <th class="mono" style="text-align:right">Out</th>
+          <th></th>
+        </tr></thead><tbody>`;
+        rows.forEach(r=>{
+          const acct = [r.account_name, r.account_no].filter(Boolean).join(' · ') || '—';
+          html += `<tr class="hist-row" data-id="${r.id}">
+            <td class="name">${escapeHtml(r.filename)}</td>
+            <td>${escapeHtml(acct)}</td>
+            <td class="mono">${fmtDate(r.period_start)} &ndash; ${fmtDate(r.period_end)}</td>
+            <td class="amt in">${fmtAmt(r.total_in)}</td>
+            <td class="amt out">${fmtAmt(r.total_out)}</td>
+            <td style="text-align:right;color:var(--orange-dark);font-weight:600;">View &rarr;</td>
+          </tr>`;
+        });
+        html += '</tbody></table>';
+        host.innerHTML = html;
+        document.querySelectorAll('.hist-row').forEach(tr=>{
+          tr.addEventListener('click', ()=> openStatement(tr.dataset.id));
+        });
+      }
+    }
+  }catch(err){
+    host.innerHTML = '<div class="empty">Statement history isn\'t available right now.</div>';
+  }
+  loadBatches();
+}
+
+async function loadBatches(){
+  const host = document.getElementById('batchList');
+  host.innerHTML = '<div class="empty">Loading…</div>';
+  try{
+    const res = await fetch('/api/batches');
+    const data = await res.json();
+    if(!res.ok){
+      host.innerHTML = '<div class="empty">Bulk upload history isn\'t available right now.</div>';
       return;
     }
-    const rows = data.statements || [];
+    const rows = data.batches || [];
     if(rows.length===0){
-      host.innerHTML = '<div class="empty">No statements analysed yet — upload one above.</div>';
+      host.innerHTML = '<div class="empty">No bulk uploads yet — select multiple files above to analyse them together.</div>';
       return;
     }
     let html = `<table><thead><tr>
-      <th>File</th><th>Account</th><th>Period</th>
+      <th>Uploaded</th><th class="mono">Files</th><th class="mono">Txns</th>
       <th class="mono" style="text-align:right">In</th>
       <th class="mono" style="text-align:right">Out</th>
       <th></th>
     </tr></thead><tbody>`;
     rows.forEach(r=>{
-      const acct = [r.account_name, r.account_no].filter(Boolean).join(' · ') || '—';
-      html += `<tr class="hist-row" data-id="${r.id}">
-        <td class="name">${escapeHtml(r.filename)}</td>
-        <td>${escapeHtml(acct)}</td>
-        <td class="mono">${fmtDate(r.period_start)} &ndash; ${fmtDate(r.period_end)}</td>
+      html += `<tr class="batch-row" data-id="${r.id}">
+        <td class="mono">${fmtDate((r.created_at||'').slice(0,10))}</td>
+        <td class="mono">${r.file_count}</td>
+        <td class="mono">${r.transaction_count!=null ? r.transaction_count.toLocaleString('en-IN') : '—'}</td>
         <td class="amt in">${fmtAmt(r.total_in)}</td>
         <td class="amt out">${fmtAmt(r.total_out)}</td>
         <td style="text-align:right;color:var(--orange-dark);font-weight:600;">View &rarr;</td>
@@ -568,11 +626,34 @@ async function loadHistory(){
     });
     html += '</tbody></table>';
     host.innerHTML = html;
-    document.querySelectorAll('.hist-row').forEach(tr=>{
-      tr.addEventListener('click', ()=> openStatement(tr.dataset.id));
+    document.querySelectorAll('.batch-row').forEach(tr=>{
+      tr.addEventListener('click', ()=> openBatch(tr.dataset.id));
     });
   }catch(err){
-    host.innerHTML = '<div class="empty">Statement history isn\'t available right now.</div>';
+    host.innerHTML = '<div class="empty">Bulk upload history isn\'t available right now.</div>';
+  }
+}
+
+async function openBatch(id){
+  errorBox.style.display = 'none';
+  loadingBox.style.display = 'block';
+  showScreen('none');
+
+  try{
+    const res = await fetch(`/api/batches/${id}`);
+    const data = await res.json();
+    loadingBox.style.display = 'none';
+    if(!res.ok){
+      showScreen('history');
+      showError(data.error || 'Could not load that bulk upload.');
+      return;
+    }
+    showScreen('bulk');
+    initBulkApp(data);
+  }catch(err){
+    loadingBox.style.display = 'none';
+    showScreen('history');
+    showError('Could not reach the server. Please try again.');
   }
 }
 
@@ -1183,12 +1264,12 @@ function render(){
     document.getElementById('dateTo').style.display = 'none';
     document.getElementById('exportBtn').style.display = 'none';
     document.getElementById('exportPdfBtn').style.display = 'none';
-    document.querySelector('.controls').style.display = 'none';
+    document.getElementById('mainControls').style.display = 'none';
     renderCounterpartyDetail(state.selected);
     return;
   }
   document.getElementById('tabBar').style.display='flex';
-  document.querySelector('.controls').style.display = 'flex';
+  document.getElementById('mainControls').style.display = 'flex';
   document.getElementById('catFilter').style.display = 'inline-block';
   const dateSortEl = document.getElementById('dateSort');
   dateSortEl.style.display = 'inline-block';
@@ -1215,7 +1296,7 @@ function initBulkApp(data){
   bulkTxns = (data.transactions || []).map(t => ({...t, amount: t.direction==='IN' ? t.cr : t.dr}));
   const summary = data.combined_summary;
   bulkCounterparties = summary ? mergeCounterparties(summary.payers, summary.payees) : [];
-  bulkState = { tab:'counterparties', search:'', category:'', page:1, pageSize:50, selected:null };
+  bulkState = { tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null };
 
   const okCount = bulkFilesList.filter(f=>f.status==='ok').length;
   const failCount = bulkFilesList.length - okCount;
@@ -1241,6 +1322,12 @@ function initBulkApp(data){
 
   document.querySelectorAll('#bulkTabBar .tab').forEach(t=>t.classList.toggle('active', t.dataset.btab==='counterparties'));
   document.getElementById('bulkSearchBox').value = '';
+  document.getElementById('bulkCatFilter').value = '';
+  document.getElementById('bulkAmountMin').value = '';
+  document.getElementById('bulkAmountMax').value = '';
+  document.getElementById('bulkDateFrom').value = '';
+  document.getElementById('bulkDateTo').value = '';
+  document.getElementById('bulkAmountLabel').textContent = 'Total activity';
 
   renderBulkWarnings(data.warnings || []);
   renderBulkFileList();
@@ -1297,8 +1384,17 @@ document.querySelectorAll('#bulkTabBar .tab').forEach(t=>t.addEventListener('cli
   t.classList.add('active');
   bulkState.tab = t.dataset.btab;
   bulkState.page = 1; bulkState.search=''; bulkState.category='';
+  bulkState.amountMin = null; bulkState.amountMax = null; bulkState.dateFrom = null; bulkState.dateTo = null;
+  bulkState.sortKey = bulkState.tab==='all' ? 'date' : 'activity';
+  bulkState.sortDir = -1;
   document.getElementById('bulkSearchBox').value = '';
   document.getElementById('bulkCatFilter').value = '';
+  document.getElementById('bulkAmountMin').value = '';
+  document.getElementById('bulkAmountMax').value = '';
+  document.getElementById('bulkDateFrom').value = '';
+  document.getElementById('bulkDateTo').value = '';
+  document.getElementById('bulkAmountLabel').textContent = bulkState.tab==='all' ? 'Amount' : 'Total activity';
+  document.getElementById('bulkSearchBox').placeholder = bulkState.tab==='all' ? 'Search counterparty or category…' : 'Search counterparty…';
   renderBulk();
 }));
 document.getElementById('bulkSearchBox').addEventListener('input', e=>{
@@ -1306,6 +1402,25 @@ document.getElementById('bulkSearchBox').addEventListener('input', e=>{
 });
 document.getElementById('bulkCatFilter').addEventListener('change', e=>{
   bulkState.category = e.target.value; bulkState.page=1; renderBulk();
+});
+document.getElementById('bulkDateSort').addEventListener('change', e=>{
+  bulkState.sortKey = bulkState.tab==='all' ? 'date' : 'activity';
+  bulkState.sortDir = e.target.value==='desc' ? -1 : 1;
+  bulkState.page = 1; renderBulk();
+});
+document.getElementById('bulkAmountMin').addEventListener('input', e=>{
+  bulkState.amountMin = e.target.value!=='' ? parseFloat(e.target.value) : null;
+  bulkState.page = 1; renderBulk();
+});
+document.getElementById('bulkAmountMax').addEventListener('input', e=>{
+  bulkState.amountMax = e.target.value!=='' ? parseFloat(e.target.value) : null;
+  bulkState.page = 1; renderBulk();
+});
+document.getElementById('bulkDateFrom').addEventListener('change', e=>{
+  bulkState.dateFrom = e.target.value || null; bulkState.page = 1; renderBulk();
+});
+document.getElementById('bulkDateTo').addEventListener('change', e=>{
+  bulkState.dateTo = e.target.value || null; bulkState.page = 1; renderBulk();
 });
 document.getElementById('bulkExportBtn').addEventListener('click', ()=>{
   if(bulkState.tab==='all'){
@@ -1334,28 +1449,73 @@ function bulkCounterpartyFileMap(){
 function getFilteredBulkCounterparties(){
   const fileMap = bulkCounterpartyFileMap();
   let filtered = bulkCounterparties.filter(r => r.name.toLowerCase().includes(bulkState.search));
-  if(bulkState.category){
-    filtered = filtered.filter(r=>{
-      return bulkTxns.some(t => t.counterparty===r.name && t.category===bulkState.category);
+  if(bulkState.category || bulkState.dateFrom || bulkState.dateTo){
+    const matchSet = new Set();
+    bulkTxns.forEach(t=>{
+      if(bulkState.category && t.category!==bulkState.category) return;
+      if(bulkState.dateFrom && (!t.date || t.date < bulkState.dateFrom)) return;
+      if(bulkState.dateTo && (!t.date || t.date > bulkState.dateTo)) return;
+      matchSet.add(t.counterparty);
     });
+    filtered = filtered.filter(r => matchSet.has(r.name));
   }
+  if(bulkState.amountMin!=null) filtered = filtered.filter(r => r.activity >= bulkState.amountMin);
+  if(bulkState.amountMax!=null) filtered = filtered.filter(r => r.activity <= bulkState.amountMax);
+
   filtered = filtered.map(r => ({...r, fileCount: (fileMap.get(r.name)||new Set()).size}));
-  return filtered.sort((a,b)=>b.activity-a.activity);
+
+  const keyMap = {activity:'activity', count:'count', name:'name', last:'last'};
+  const k = keyMap[bulkState.sortKey] || 'activity';
+  filtered.sort((a,b)=>{
+    let av=a[k], bv=b[k];
+    if(typeof av==='string') return bulkState.sortDir===1 ? av.localeCompare(bv) : bv.localeCompare(av);
+    return bulkState.sortDir===1 ? av-bv : bv-av;
+  });
+  return filtered;
 }
 
 function getFilteredBulkTransactions(){
-  return bulkTxns.filter(t=>{
+  let filtered = bulkTxns.filter(t=>{
     if(bulkState.category && t.category!==bulkState.category) return false;
     if(bulkState.search){
       const s = bulkState.search;
       if(!t.counterparty.toLowerCase().includes(s) && !t.category.toLowerCase().includes(s)) return false;
     }
+    if(bulkState.amountMin!=null && t.amount < bulkState.amountMin) return false;
+    if(bulkState.amountMax!=null && t.amount > bulkState.amountMax) return false;
+    if(bulkState.dateFrom && (!t.date || t.date < bulkState.dateFrom)) return false;
+    if(bulkState.dateTo && (!t.date || t.date > bulkState.dateTo)) return false;
     return true;
-  }).sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+  });
+  filtered.sort((a,b)=>{
+    const av=a.date||'', bv=b.date||'';
+    return bulkState.sortDir===-1 ? bv.localeCompare(av) : av.localeCompare(bv);
+  });
+  return filtered;
+}
+
+function renderBulkPager(total){
+  const pager = document.getElementById('bulkPager');
+  const pages = Math.max(1, Math.ceil(total/bulkState.pageSize));
+  if(pages<=1){ pager.style.display='none'; return; }
+  pager.style.display='flex';
+  pager.innerHTML = `
+    <button ${bulkState.page<=1?'disabled':''} id="bulkPrevBtn">← Prev</button>
+    <span>Page ${bulkState.page} of ${pages}</span>
+    <button ${bulkState.page>=pages?'disabled':''} id="bulkNextBtn">Next →</button>
+  `;
+  const prev = document.getElementById('bulkPrevBtn');
+  const next = document.getElementById('bulkNextBtn');
+  if(prev) prev.addEventListener('click', ()=>{ bulkState.page--; renderBulk(); });
+  if(next) next.addEventListener('click', ()=>{ bulkState.page++; renderBulk(); });
 }
 
 function renderBulk(){
-  document.getElementById('bulkCatFilter').style.display = bulkState.tab==='all' ? 'inline-block' : 'none';
+  const dateSortEl = document.getElementById('bulkDateSort');
+  const sortKeyForTab = bulkState.tab==='all' ? 'date' : 'activity';
+  if(bulkState.sortKey===sortKeyForTab){
+    dateSortEl.value = bulkState.sortDir===-1 ? 'desc' : 'asc';
+  }
   if(bulkState.tab==='counterparties') renderBulkCounterpartyList();
   else renderBulkAllTransactions();
 }
@@ -1368,6 +1528,7 @@ function renderBulkCounterpartyList(){
   const pageRows = filtered.slice(start, start+bulkState.pageSize);
   if(pageRows.length===0){
     document.getElementById('bulkTableHost').innerHTML = `<div class="empty">No counterparties match your filters.</div>`;
+    renderBulkPager(0);
     return;
   }
   const maxAgg = Math.max(1, ...filtered.map(r=>r.activity));
@@ -1396,6 +1557,7 @@ function renderBulkCounterpartyList(){
       renderBulkDetail(bulkState.selected);
     });
   });
+  renderBulkPager(filtered.length);
 }
 
 function renderBulkAllTransactions(){
@@ -1406,6 +1568,7 @@ function renderBulkAllTransactions(){
   const pageRows = filtered.slice(start, start+bulkState.pageSize);
   if(pageRows.length===0){
     document.getElementById('bulkTableHost').innerHTML = `<div class="empty">No transactions match your filters.</div>`;
+    renderBulkPager(0);
     return;
   }
   let html = `<table><thead><tr>
@@ -1425,6 +1588,7 @@ function renderBulkAllTransactions(){
   });
   html += '</tbody></table>';
   document.getElementById('bulkTableHost').innerHTML = html;
+  renderBulkPager(filtered.length);
 }
 
 function renderBulkDetail(name){

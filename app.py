@@ -4,7 +4,10 @@ import os
 from flask import Flask, jsonify, request, send_from_directory
 
 from parser import StatementFormatError, build_summary, parse_workbook
-from db import check_connection, init_db, save_statement, list_statements, get_statement
+from db import (
+    check_connection, init_db, save_statement, list_statements, get_statement,
+    save_batch, list_batches, get_batch,
+)
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
@@ -162,7 +165,15 @@ def analyze_bulk():
 
     combined_summary = build_summary(combined_transactions) if combined_transactions else None
 
+    batch_id = None
+    try:
+        statement_ids = [f.get("statement_id") for f in files_result if f["status"] == "ok"]
+        batch_id = save_batch(statement_ids, combined_summary, warnings)
+    except Exception as e:
+        print(f"Could not save batch to DB: {e}")
+
     return jsonify({
+        "batch_id": batch_id,
         "files": files_result,
         "warnings": warnings,
         "combined_summary": combined_summary,
@@ -210,6 +221,73 @@ def api_get_statement(statement_id):
         "account_name": meta["account_name"],
         "summary": summary,
         "transactions": transactions,
+    })
+
+
+@app.get("/api/batches")
+def api_list_batches():
+    try:
+        rows = list_batches()
+    except Exception as e:
+        return jsonify({"error": f"Batch history isn't available right now: {e}"}), 503
+
+    for r in rows:
+        if r.get("created_at"):
+            r["created_at"] = r["created_at"].isoformat()
+        if r.get("total_in") is not None:
+            r["total_in"] = float(r["total_in"])
+        if r.get("total_out") is not None:
+            r["total_out"] = float(r["total_out"])
+        r["warnings"] = r["warnings"].split("\n") if r.get("warnings") else []
+
+    return jsonify({"batches": rows})
+
+
+@app.get("/api/batches/<int:batch_id>")
+def api_get_batch(batch_id):
+    try:
+        batch, statements = get_batch(batch_id)
+    except Exception as e:
+        return jsonify({"error": f"Batch history isn't available right now: {e}"}), 503
+
+    if batch is None:
+        return jsonify({"error": "That bulk upload couldn't be found."}), 404
+
+    files_result = []
+    combined_transactions = []
+    for s in statements:
+        try:
+            _, transactions = get_statement(s["id"])
+        except Exception as e:
+            return jsonify({"error": f"Could not reload one of this batch's statements: {e}"}), 503
+
+        files_result.append({
+            "filename": s["filename"],
+            "status": "ok",
+            "statement_id": s["id"],
+            "account_no": s["account_no"],
+            "account_name": s["account_name"],
+            "period_start": s["period_start"].isoformat() if s["period_start"] else None,
+            "period_end": s["period_end"].isoformat() if s["period_end"] else None,
+            "total_in": float(s["total_in"]) if s["total_in"] is not None else 0.0,
+            "total_out": float(s["total_out"]) if s["total_out"] is not None else 0.0,
+            "transaction_count": s["transaction_count"],
+        })
+        for t in transactions:
+            tagged = dict(t)
+            tagged["source_filename"] = s["filename"]
+            tagged["source_account_no"] = s["account_no"]
+            tagged["source_account_name"] = s["account_name"]
+            combined_transactions.append(tagged)
+
+    combined_summary = build_summary(combined_transactions) if combined_transactions else None
+
+    return jsonify({
+        "batch_id": batch["id"],
+        "files": files_result,
+        "warnings": batch["warnings"].split("\n") if batch.get("warnings") else [],
+        "combined_summary": combined_summary,
+        "transactions": combined_transactions,
     })
 
 
