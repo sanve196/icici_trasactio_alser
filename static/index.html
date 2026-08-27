@@ -287,22 +287,33 @@
     </div>
   </div>
 
-  <div class="upload-panel" id="uploadPanel">
-    <p>Drop your bank statement export here, or choose a file.<br>The file is parsed once and saved, so you can reopen it later without re-uploading.</p>
-    <label class="upload-btn" for="fileInput">Choose .xlsx file</label>
-    <input type="file" id="fileInput" accept=".xlsx" />
-    <div class="file-hint">Expected columns: Ac_No, AC_Name, Tran_ID, Tran_Date, Inst_Type, Inst_Num, Dr_Amt, Cr_Amt, Balance, Narration, pstd_dt</div>
-  </div>
-
-  <div class="glass history-panel" id="historyPanel">
-    <div class="heading">Previously analysed statements</div>
-    <div id="historyList" class="table-card"><div class="empty">Loading…</div></div>
-  </div>
-
   <div class="error-box" id="errorBox"></div>
   <div class="loading" id="loadingBox">Parsing statement…</div>
 
+  <div id="screenUpload">
+    <div class="upload-panel" id="uploadPanel">
+      <p>Drop your bank statement export here, or choose a file.<br>The file is parsed once and saved, so you can reopen it later without re-uploading.</p>
+      <label class="upload-btn" for="fileInput">Choose .xlsx file</label>
+      <input type="file" id="fileInput" accept=".xlsx" />
+      <div class="file-hint">Expected columns: Ac_No, AC_Name, Tran_ID, Tran_Date, Inst_Type, Inst_Num, Dr_Amt, Cr_Amt, Balance, Narration, pstd_dt</div>
+    </div>
+    <div style="text-align:center;margin-top:16px;">
+      <button class="reset-link" id="viewHistoryLink">View previously analysed statements</button>
+    </div>
+  </div>
+
+  <div id="screenHistory" style="display:none;">
+    <div class="glass history-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
+        <div class="heading" style="margin-bottom:0;">Previously analysed statements</div>
+        <button class="upload-btn" id="newUploadBtn" style="padding:9px 20px;font-size:12.5px;">Upload new statement</button>
+      </div>
+      <div id="historyList" class="table-card"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
   <div class="app-body" id="appBody">
+    <button class="back-link" id="backToHistoryBtn"><i>&larr;</i> Back to statement history</button>
     <div class="stats" id="statStrip"></div>
 
     <div class="tabs" id="tabBar">
@@ -334,7 +345,6 @@
       Counterparty names are parsed from the bank's free-text narration field, which ICICI truncates to 50 characters —
       some names are cut short and may represent the same real entity under slightly different labels.
       The Counterparties list excludes bank charges, cheque returns and unnamed cash deposits. Click any counterparty to see every transaction with them, in both directions.
-      <br><br><button class="reset-link" id="resetBtn">Analyse a different file</button>
     </div>
   </div>
 
@@ -343,10 +353,18 @@
 <script>
 const fileInput = document.getElementById('fileInput');
 const uploadPanel = document.getElementById('uploadPanel');
-const historyPanel = document.getElementById('historyPanel');
+const screenUpload = document.getElementById('screenUpload');
+const screenHistory = document.getElementById('screenHistory');
 const errorBox = document.getElementById('errorBox');
 const loadingBox = document.getElementById('loadingBox');
 const appBody = document.getElementById('appBody');
+
+function showScreen(name){
+  screenUpload.style.display = name==='upload' ? 'block' : 'none';
+  screenHistory.style.display = name==='history' ? 'block' : 'none';
+  appBody.style.display = name==='results' ? 'block' : 'none';
+  if(name==='history') loadHistory();
+}
 
 ['dragover','dragenter'].forEach(evt => uploadPanel.addEventListener(evt, e=>{
   e.preventDefault(); uploadPanel.classList.add('drag');
@@ -362,13 +380,14 @@ fileInput.addEventListener('change', e=>{
   const f = e.target.files[0];
   if(f) handleFile(f);
 });
-document.getElementById('resetBtn').addEventListener('click', ()=>{
-  appBody.style.display = 'none';
-  uploadPanel.style.display = 'block';
-  historyPanel.style.display = 'block';
-  errorBox.style.display = 'none';
+document.getElementById('viewHistoryLink').addEventListener('click', ()=> showScreen('history'));
+document.getElementById('newUploadBtn').addEventListener('click', ()=>{
   fileInput.value = '';
-  loadHistory();
+  showScreen('upload');
+});
+document.getElementById('backToHistoryBtn').addEventListener('click', ()=>{
+  fileInput.value = '';
+  showScreen('history');
 });
 
 function showError(msg){
@@ -380,9 +399,7 @@ function showError(msg){
 async function handleFile(file){
   errorBox.style.display = 'none';
   loadingBox.style.display = 'block';
-  uploadPanel.style.display = 'none';
-  historyPanel.style.display = 'none';
-  appBody.style.display = 'none';
+  showScreen('none');
 
   const form = new FormData();
   form.append('file', file);
@@ -390,19 +407,18 @@ async function handleFile(file){
   try{
     const res = await fetch('/api/analyze', { method:'POST', body: form });
     const data = await res.json();
+    loadingBox.style.display = 'none';
     if(!res.ok){
+      showScreen('upload');
       showError(data.error || 'Something went wrong while parsing this file.');
-      uploadPanel.style.display = 'block';
-      historyPanel.style.display = 'block';
       return;
     }
-    loadingBox.style.display = 'none';
-    appBody.style.display = 'block';
+    showScreen('results');
     initApp(data.transactions, data.summary);
   }catch(err){
+    loadingBox.style.display = 'none';
+    showScreen('upload');
     showError('Could not reach the server. Please try again.');
-    uploadPanel.style.display = 'block';
-    historyPanel.style.display = 'block';
   }
 }
 
@@ -470,26 +486,23 @@ async function loadHistory(){
 async function openStatement(id){
   errorBox.style.display = 'none';
   loadingBox.style.display = 'block';
-  uploadPanel.style.display = 'none';
-  historyPanel.style.display = 'none';
-  appBody.style.display = 'none';
+  showScreen('none');
 
   try{
     const res = await fetch(`/api/statements/${id}`);
     const data = await res.json();
+    loadingBox.style.display = 'none';
     if(!res.ok){
+      showScreen('history');
       showError(data.error || 'Could not load that statement.');
-      uploadPanel.style.display = 'block';
-      historyPanel.style.display = 'block';
       return;
     }
-    loadingBox.style.display = 'none';
-    appBody.style.display = 'block';
+    showScreen('results');
     initApp(data.transactions, data.summary);
   }catch(err){
+    loadingBox.style.display = 'none';
+    showScreen('history');
     showError('Could not reach the server. Please try again.');
-    uploadPanel.style.display = 'block';
-    historyPanel.style.display = 'block';
   }
 }
 
@@ -877,7 +890,7 @@ function render(){
   else renderAllTable();
 }
 
-loadHistory();
+showScreen('upload');
 </script>
 </body>
 </html>
