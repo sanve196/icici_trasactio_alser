@@ -207,6 +207,19 @@ def get_statement(statement_id):
         conn.close()
 
 
+def delete_statement(statement_id):
+    """Delete one saved statement and its transactions. Returns True if a row was deleted."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM statements WHERE id=%s;", (statement_id,))
+            deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
+    finally:
+        conn.close()
+
+
 def save_batch(statement_ids, combined_summary, warnings):
     """
     Persist a bulk-upload batch as a list of statement ids that belong
@@ -291,5 +304,32 @@ def get_batch(batch_id):
             )
             statements = [dict(r) for r in cur.fetchall()]
             return dict(batch), statements
+    finally:
+        conn.close()
+
+
+def delete_batch(batch_id, delete_statements_too=False):
+    """
+    Delete a saved bulk-upload batch. By default this only removes the batch
+    record/grouping itself (the underlying statements remain in history,
+    reachable individually). If delete_statements_too is True, the statements
+    that belonged to this batch are deleted as well. Returns True if the
+    batch existed.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            statement_ids = []
+            if delete_statements_too:
+                cur.execute("SELECT statement_id FROM batch_statements WHERE batch_id=%s;", (batch_id,))
+                statement_ids = [r[0] for r in cur.fetchall()]
+
+            cur.execute("DELETE FROM batches WHERE id=%s;", (batch_id,))
+            deleted = cur.rowcount > 0
+
+            if delete_statements_too and statement_ids:
+                cur.execute("DELETE FROM statements WHERE id = ANY(%s);", (statement_ids,))
+        conn.commit()
+        return deleted
     finally:
         conn.close()

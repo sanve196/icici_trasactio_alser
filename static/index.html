@@ -202,6 +202,12 @@
     background:var(--glass-strong);color:var(--orange-dark);
     box-shadow:none;border:1px solid rgba(245,130,31,0.4);
   }
+  .delete-btn{
+    background:none;border:none;cursor:pointer;color:var(--debit);
+    font-family:'Inter',sans-serif;font-size:12px;font-weight:600;
+    padding:4px 8px;border-radius:6px;opacity:.75;
+  }
+  .delete-btn:hover{opacity:1;background:rgba(229,72,77,0.1);}
 
   .table-card{
     background:var(--glass);
@@ -567,7 +573,7 @@ async function loadHistory(){
           <th>File</th><th>Account</th><th>Period</th>
           <th class="mono" style="text-align:right">In</th>
           <th class="mono" style="text-align:right">Out</th>
-          <th></th>
+          <th></th><th></th>
         </tr></thead><tbody>`;
         rows.forEach(r=>{
           const acct = [r.account_name, r.account_no].filter(Boolean).join(' · ') || '—';
@@ -578,6 +584,7 @@ async function loadHistory(){
             <td class="amt in">${fmtAmt(r.total_in)}</td>
             <td class="amt out">${fmtAmt(r.total_out)}</td>
             <td style="text-align:right;color:var(--orange-dark);font-weight:600;">View &rarr;</td>
+            <td style="text-align:right;"><button class="delete-btn" data-id="${r.id}" data-name="${escapeHtml(r.filename)}">Delete</button></td>
           </tr>`;
         });
         html += '</tbody></table>';
@@ -585,12 +592,33 @@ async function loadHistory(){
         document.querySelectorAll('.hist-row').forEach(tr=>{
           tr.addEventListener('click', ()=> openStatement(tr.dataset.id));
         });
+        host.querySelectorAll('.delete-btn').forEach(btn=>{
+          btn.addEventListener('click', e=>{
+            e.stopPropagation();
+            deleteStatement(btn.dataset.id, btn.dataset.name);
+          });
+        });
       }
     }
   }catch(err){
     host.innerHTML = '<div class="empty">Statement history isn\'t available right now.</div>';
   }
   loadBatches();
+}
+
+async function deleteStatement(id, filename){
+  if(!confirm(`Delete "${filename}"? This removes it and its transactions permanently. This can't be undone.`)) return;
+  try{
+    const res = await fetch(`/api/statements/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if(!res.ok){
+      alert(data.error || 'Could not delete this statement.');
+      return;
+    }
+    loadHistory();
+  }catch(err){
+    alert('Could not reach the server. Please try again.');
+  }
 }
 
 async function loadBatches(){
@@ -612,7 +640,7 @@ async function loadBatches(){
       <th>Uploaded</th><th class="mono">Files</th><th class="mono">Txns</th>
       <th class="mono" style="text-align:right">In</th>
       <th class="mono" style="text-align:right">Out</th>
-      <th></th>
+      <th></th><th></th>
     </tr></thead><tbody>`;
     rows.forEach(r=>{
       html += `<tr class="batch-row" data-id="${r.id}">
@@ -622,6 +650,7 @@ async function loadBatches(){
         <td class="amt in">${fmtAmt(r.total_in)}</td>
         <td class="amt out">${fmtAmt(r.total_out)}</td>
         <td style="text-align:right;color:var(--orange-dark);font-weight:600;">View &rarr;</td>
+        <td style="text-align:right;"><button class="delete-btn" data-id="${r.id}">Delete</button></td>
       </tr>`;
     });
     html += '</tbody></table>';
@@ -629,8 +658,29 @@ async function loadBatches(){
     document.querySelectorAll('.batch-row').forEach(tr=>{
       tr.addEventListener('click', ()=> openBatch(tr.dataset.id));
     });
+    host.querySelectorAll('.delete-btn').forEach(btn=>{
+      btn.addEventListener('click', e=>{
+        e.stopPropagation();
+        deleteBatch(btn.dataset.id);
+      });
+    });
   }catch(err){
     host.innerHTML = '<div class="empty">Bulk upload history isn\'t available right now.</div>';
+  }
+}
+
+async function deleteBatch(id){
+  if(!confirm('Delete this bulk upload group? The individual files stay in your statement history — this only removes the combined grouping.')) return;
+  try{
+    const res = await fetch(`/api/batches/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if(!res.ok){
+      alert(data.error || 'Could not delete this bulk upload.');
+      return;
+    }
+    loadBatches();
+  }catch(err){
+    alert('Could not reach the server. Please try again.');
   }
 }
 

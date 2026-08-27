@@ -6,7 +6,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from parser import StatementFormatError, build_summary, parse_workbook
 from db import (
     check_connection, init_db, save_statement, list_statements, get_statement,
-    save_batch, list_batches, get_batch,
+    delete_statement, save_batch, list_batches, get_batch, delete_batch,
 )
 
 app = Flask(__name__, static_folder="static", static_url_path="")
@@ -224,6 +224,19 @@ def api_get_statement(statement_id):
     })
 
 
+@app.delete("/api/statements/<int:statement_id>")
+def api_delete_statement(statement_id):
+    try:
+        deleted = delete_statement(statement_id)
+    except Exception as e:
+        return jsonify({"error": f"Could not delete this statement: {e}"}), 503
+
+    if not deleted:
+        return jsonify({"error": "That statement couldn't be found."}), 404
+
+    return jsonify({"deleted": True})
+
+
 @app.get("/api/batches")
 def api_list_batches():
     try:
@@ -289,6 +302,20 @@ def api_get_batch(batch_id):
         "combined_summary": combined_summary,
         "transactions": combined_transactions,
     })
+
+
+@app.delete("/api/batches/<int:batch_id>")
+def api_delete_batch(batch_id):
+    delete_statements_too = request.args.get("delete_statements", "false").lower() == "true"
+    try:
+        deleted = delete_batch(batch_id, delete_statements_too=delete_statements_too)
+    except Exception as e:
+        return jsonify({"error": f"Could not delete this bulk upload: {e}"}), 503
+
+    if not deleted:
+        return jsonify({"error": "That bulk upload couldn't be found."}), 404
+
+    return jsonify({"deleted": True})
 
 
 if __name__ == "__main__":
