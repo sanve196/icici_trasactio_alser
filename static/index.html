@@ -6,6 +6,7 @@
 <title>Transaction Analyser</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
     --bg1:#FFF6EC;
@@ -175,15 +176,26 @@
   .tab.active{color:#fff;background:linear-gradient(135deg,var(--orange),var(--orange-dark));box-shadow:0 4px 12px rgba(217,99,26,0.3);}
 
   .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;}
-  input[type=text], select{
+  input[type=text], input[type=number], input[type=date], select{
     background:var(--glass-strong);border:1px solid var(--glass-border);color:var(--ink);
     font-family:'Inter',sans-serif;font-size:13px;padding:9px 14px;border-radius:999px;
     -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
   }
+  input[type=number]{width:110px;}
+  input[type=date]{width:150px;}
   input[type=text]::placeholder{color:var(--muted);}
   input:focus, select:focus{outline:2px solid rgba(245,130,31,0.35);}
-  .search{flex:1;min-width:200px;}
+  .search{flex:1;min-width:160px;}
   .count-note{font-family:'Inter',sans-serif;font-size:12px;color:var(--muted);margin-left:auto;}
+  .filter-label{font-family:'Inter',sans-serif;font-size:11.5px;color:var(--muted);margin-right:-4px;}
+  .export-btn{
+    background:linear-gradient(135deg,var(--orange),var(--orange-dark));
+    color:#fff;font-family:'Inter',sans-serif;font-weight:600;font-size:12.5px;
+    padding:9px 16px;border-radius:999px;cursor:pointer;border:none;
+    box-shadow:0 4px 12px rgba(217,99,26,0.28);
+    display:inline-flex;align-items:center;gap:6px;white-space:nowrap;
+  }
+  .export-btn:hover{transform:translateY(-1px);}
 
   #tableHost{
     background:var(--glass);
@@ -295,6 +307,13 @@
         <option value="desc">Newest first</option>
         <option value="asc">Oldest first</option>
       </select>
+      <span class="filter-label" id="amountLabel" style="display:none">Amount</span>
+      <input type="number" id="amountMin" placeholder="Min ₹" style="display:none" />
+      <input type="number" id="amountMax" placeholder="Max ₹" style="display:none" />
+      <span class="filter-label" id="dateLabel" style="display:none">Date</span>
+      <input type="date" id="dateFrom" style="display:none" />
+      <input type="date" id="dateTo" style="display:none" />
+      <button class="export-btn" id="exportBtn" style="display:none">Export to Excel</button>
       <span class="count-note" id="countNote"></span>
     </div>
 
@@ -375,7 +394,7 @@ async function handleFile(file){
 let txns = [];
 let counterparties = []; // merged, both directions
 let MAXAGG = 1;
-let state = { view:'list', tab:'counterparties', search:'', category:'', sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1 };
+let state = { view:'list', tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1 };
 
 function fmtAmt(n){
   if(n===null||n===undefined) return '—';
@@ -433,9 +452,13 @@ function initApp(transactions, summary){
     const o = document.createElement('option'); o.value=c; o.textContent=c; catSel.appendChild(o);
   });
 
-  state = { view:'list', tab:'counterparties', search:'', category:'', sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1 };
+  state = { view:'list', tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1 };
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab==='counterparties'));
   document.getElementById('searchBox').value = '';
+  document.getElementById('amountMin').value = '';
+  document.getElementById('amountMax').value = '';
+  document.getElementById('dateFrom').value = '';
+  document.getElementById('dateTo').value = '';
   render();
 }
 
@@ -458,6 +481,26 @@ document.getElementById('dateSort').addEventListener('change', e=>{
   state.sortDir = e.target.value==='desc' ? -1 : 1;
   state.page = 1;
   render();
+});
+document.getElementById('amountMin').addEventListener('input', e=>{
+  state.amountMin = e.target.value!=='' ? parseFloat(e.target.value) : null;
+  state.page = 1; render();
+});
+document.getElementById('amountMax').addEventListener('input', e=>{
+  state.amountMax = e.target.value!=='' ? parseFloat(e.target.value) : null;
+  state.page = 1; render();
+});
+document.getElementById('dateFrom').addEventListener('change', e=>{
+  state.dateFrom = e.target.value || null;
+  state.page = 1; render();
+});
+document.getElementById('dateTo').addEventListener('change', e=>{
+  state.dateTo = e.target.value || null;
+  state.page = 1; render();
+});
+document.getElementById('exportBtn').addEventListener('click', ()=>{
+  const rows = getFilteredAllTransactions();
+  exportTransactionsToExcel(rows, 'transactions');
 });
 
 function renderCounterpartyList(){
@@ -510,6 +553,8 @@ function renderCounterpartyDetail(name){
   const rows = txns.filter(t=>t.counterparty===name);
   const totalIn = rows.filter(t=>t.direction==='IN').reduce((a,t)=>a+t.cr,0);
   const totalOut = rows.filter(t=>t.direction==='OUT').reduce((a,t)=>a+t.dr,0);
+  let largest = null;
+  rows.forEach(t=>{ if(!largest || t.amount>largest.amount) largest = t; });
 
   const keyMap = {date:'date', category:'category', amount:'amount'};
   const k = keyMap[state.detailSortKey] || 'date';
@@ -529,16 +574,24 @@ function renderCounterpartyDetail(name){
         <h2>${escapeHtml(name)}</h2>
         <div class="sub-note">Every transaction with this counterparty, both directions</div>
       </div>
-      <select id="detailDateSort">
-        <option value="desc" ${state.detailSortKey==='date' && state.detailSortDir===-1 ? 'selected':''}>Newest first</option>
-        <option value="asc" ${state.detailSortKey==='date' && state.detailSortDir===1 ? 'selected':''}>Oldest first</option>
-      </select>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <select id="detailDateSort">
+          <option value="desc" ${state.detailSortKey==='date' && state.detailSortDir===-1 ? 'selected':''}>Newest first</option>
+          <option value="asc" ${state.detailSortKey==='date' && state.detailSortDir===1 ? 'selected':''}>Oldest first</option>
+        </select>
+        <button class="export-btn" id="detailExportBtn">Export to Excel</button>
+      </div>
     </div>
     <div class="detail-stats">
       <div class="stat"><div class="label">Money in</div><div class="value in">${fmtAmt(totalIn)}</div></div>
       <div class="stat"><div class="label">Money out</div><div class="value out">${fmtAmt(totalOut)}</div></div>
       <div class="stat"><div class="label">Net</div><div class="value ${totalIn-totalOut>=0?'net pos':'net neg'}">${fmtAmt(totalIn-totalOut)}</div></div>
       <div class="stat"><div class="label">Transactions</div><div class="value">${rows.length}</div></div>
+      <div class="stat">
+        <div class="label">Largest transaction</div>
+        <div class="value ${largest ? (largest.direction==='IN'?'in':'out') : ''}">${largest ? fmtAmt(largest.amount) : '—'}</div>
+        ${largest ? `<div style="font-size:11px;color:var(--muted);margin-top:4px;">${fmtDate(largest.date)} · ${escapeHtml(largest.category)}</div>` : ''}
+      </div>
     </div>
     <table><thead><tr>
       <th data-k="date" class="mono">Date</th>
@@ -566,6 +619,9 @@ function renderCounterpartyDetail(name){
     state.detailSortDir = e.target.value==='desc' ? -1 : 1;
     render();
   });
+  document.getElementById('detailExportBtn').addEventListener('click', ()=>{
+    exportTransactionsToExcel(sorted, name.replace(/[^a-z0-9]+/gi,'_'));
+  });
 
   document.getElementById('backBtn').addEventListener('click', ()=>{
     state.view='list'; state.selected=null;
@@ -582,13 +638,17 @@ function renderCounterpartyDetail(name){
   });
 }
 
-function renderAllTable(){
+function getFilteredAllTransactions(){
   let filtered = txns.filter(t=>{
     if(state.category && t.category!==state.category) return false;
     if(state.search){
       const s = state.search;
       if(!t.counterparty.toLowerCase().includes(s) && !t.category.toLowerCase().includes(s)) return false;
     }
+    if(state.amountMin!=null && t.amount < state.amountMin) return false;
+    if(state.amountMax!=null && t.amount > state.amountMax) return false;
+    if(state.dateFrom && (!t.date || t.date < state.dateFrom)) return false;
+    if(state.dateTo && (!t.date || t.date > state.dateTo)) return false;
     return true;
   });
   const keyMap = {date:'date', category:'category', counterparty:'counterparty', amount:'amount'};
@@ -598,6 +658,34 @@ function renderAllTable(){
     if(typeof av==='string') return state.sortDir===-1 ? bv.localeCompare(av) : av.localeCompare(bv);
     return state.sortDir===-1 ? bv-av : av-bv;
   });
+  return filtered;
+}
+
+function exportTransactionsToExcel(rows, filenamePrefix){
+  if(!rows || rows.length===0){
+    alert('No transactions match the current filters — nothing to export.');
+    return;
+  }
+  const data = rows.map(t=>({
+    Date: t.date || '',
+    Category: t.category,
+    Counterparty: t.counterparty,
+    Direction: t.direction,
+    Debit: t.dr || 0,
+    Credit: t.cr || 0,
+    Balance: t.balance,
+    Narration: t.narration || ''
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [{wch:12},{wch:24},{wch:28},{wch:10},{wch:14},{wch:14},{wch:14},{wch:40}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Transactions');
+  const stamp = new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, `${filenamePrefix}_${stamp}.xlsx`);
+}
+
+function renderAllTable(){
+  let filtered = getFilteredAllTransactions();
 
   document.getElementById('countNote').textContent = `${filtered.length.toLocaleString('en-IN')} transactions`;
 
@@ -674,16 +762,31 @@ function render(){
   if(state.view==='detail'){
     document.getElementById('catFilter').style.display = 'none';
     document.getElementById('dateSort').style.display = 'none';
+    document.getElementById('amountLabel').style.display = 'none';
+    document.getElementById('amountMin').style.display = 'none';
+    document.getElementById('amountMax').style.display = 'none';
+    document.getElementById('dateLabel').style.display = 'none';
+    document.getElementById('dateFrom').style.display = 'none';
+    document.getElementById('dateTo').style.display = 'none';
+    document.getElementById('exportBtn').style.display = 'none';
     document.querySelector('.controls').style.display = 'none';
     renderCounterpartyDetail(state.selected);
     return;
   }
   document.getElementById('tabBar').style.display='flex';
   document.querySelector('.controls').style.display = 'flex';
-  document.getElementById('catFilter').style.display = state.tab==='all' ? 'inline-block' : 'none';
+  const isAll = state.tab==='all';
+  document.getElementById('catFilter').style.display = isAll ? 'inline-block' : 'none';
   const dateSortEl = document.getElementById('dateSort');
-  dateSortEl.style.display = state.tab==='all' ? 'inline-block' : 'none';
-  if(state.tab==='all' && state.sortKey==='date'){
+  dateSortEl.style.display = isAll ? 'inline-block' : 'none';
+  document.getElementById('amountLabel').style.display = isAll ? 'inline' : 'none';
+  document.getElementById('amountMin').style.display = isAll ? 'inline-block' : 'none';
+  document.getElementById('amountMax').style.display = isAll ? 'inline-block' : 'none';
+  document.getElementById('dateLabel').style.display = isAll ? 'inline' : 'none';
+  document.getElementById('dateFrom').style.display = isAll ? 'inline-block' : 'none';
+  document.getElementById('dateTo').style.display = isAll ? 'inline-block' : 'none';
+  document.getElementById('exportBtn').style.display = isAll ? 'inline-flex' : 'none';
+  if(isAll && state.sortKey==='date'){
     dateSortEl.value = state.sortDir===-1 ? 'desc' : 'asc';
   }
   if(state.tab==='counterparties') renderCounterpartyList();
