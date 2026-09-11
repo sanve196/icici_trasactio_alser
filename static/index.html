@@ -554,13 +554,6 @@ function fmtDate(iso){
   const d = new Date(iso+'T00:00:00');
   return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
 }
-function fmtPostedDate(value){
-  if(!value) return '—';
-  const [datePart, timePart] = value.split(' ');
-  const d = new Date(datePart+'T00:00:00');
-  const dateStr = d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
-  return timePart ? `${dateStr}, ${timePart}` : dateStr;
-}
 function dirLabel(direction){
   if(direction==='IN') return 'Deposit';
   if(direction==='OUT') return 'Withdrawal';
@@ -1088,7 +1081,6 @@ function renderCounterpartyDetail(name){
       <th class="mono">Reference No.</th>
       <th data-k="amount" class="mono" style="text-align:right">Amount</th>
       <th class="mono" style="text-align:right">Balance after</th>
-      <th class="mono">Posted</th>
     </tr></thead><tbody>`;
     sorted.forEach(t=>{
       const cls = t.direction==='IN'?'in':(t.direction==='OUT'?'out':'');
@@ -1099,7 +1091,6 @@ function renderCounterpartyDetail(name){
         <td class="mono" style="font-size:12px;color:var(--muted);">${escapeHtml(t.reference_no || '—')}</td>
         <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
         <td class="mono" style="text-align:right">${fmtAmt(t.balance)}</td>
-        <td class="mono" style="font-size:12px;color:var(--muted);">${fmtPostedDate(t.posted_date)}</td>
       </tr>`;
     });
     html += '</tbody></table>';
@@ -1191,12 +1182,11 @@ function exportTransactionsToExcel(rows, filenamePrefix){
     Withdrawal: t.dr || 0,
     Deposit: t.cr || 0,
     Balance: t.balance,
-    'Posted Date': t.posted_date || '',
     'Cheque No.': t.cheque_no || '',
     Narration: t.narration || ''
   }));
   const ws = XLSX.utils.json_to_sheet(data);
-  ws['!cols'] = [{wch:12},{wch:24},{wch:28},{wch:12},{wch:16},{wch:14},{wch:14},{wch:14},{wch:18},{wch:12},{wch:40}];
+  ws['!cols'] = [{wch:12},{wch:24},{wch:28},{wch:12},{wch:16},{wch:14},{wch:14},{wch:14},{wch:12},{wch:40}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Transactions');
   const stamp = new Date().toISOString().slice(0,10);
@@ -1232,9 +1222,9 @@ function exportTransactionsToPDF(rows, filenamePrefix, reportTitle){
 
   doc.autoTable({
     startY: y,
-    head: [['Date','Category','Counterparty','Direction','Reference No.','Amount','Balance','Posted']],
+    head: [['Date','Category','Counterparty','Direction','Reference No.','Amount','Balance']],
     body: rows.map(t=>[
-      fmtDate(t.date), t.category, t.counterparty, dirLabel(t.direction), t.reference_no || '—', fmtAmt(t.amount), fmtAmt(t.balance), fmtPostedDate(t.posted_date)
+      fmtDate(t.date), t.category, t.counterparty, dirLabel(t.direction), t.reference_no || '—', fmtAmt(t.amount), fmtAmt(t.balance)
     ]),
     styles: { fontSize: 8, textColor: [35,38,47] },
     headStyles: { fillColor: [245,130,31], textColor: [255,255,255], fontStyle: 'bold' },
@@ -1268,7 +1258,6 @@ function renderAllTable(){
     <th class="mono">Reference No.</th>
     <th data-k="amount" class="mono" style="text-align:right">Amount</th>
     <th class="mono" style="text-align:right">Balance</th>
-    <th class="mono">Posted</th>
   </tr></thead><tbody>`;
   pageRows.forEach(t=>{
     const cls = t.direction==='IN'?'in':(t.direction==='OUT'?'out':'');
@@ -1280,7 +1269,6 @@ function renderAllTable(){
       <td class="mono" style="font-size:12px;color:var(--muted);">${escapeHtml(t.reference_no || '—')}</td>
       <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
       <td class="mono" style="text-align:right">${fmtAmt(t.balance)}</td>
-      <td class="mono" style="font-size:12px;color:var(--muted);">${fmtPostedDate(t.posted_date)}</td>
     </tr>`;
   });
   html += '</tbody></table>';
@@ -1653,7 +1641,6 @@ function renderBulkAllTransactions(){
     <th class="mono">Reference No.</th>
     <th class="mono" style="text-align:right">Amount</th>
     <th class="mono" style="text-align:right">Balance</th>
-    <th class="mono">Posted</th>
   </tr></thead><tbody>`;
   pageRows.forEach(t=>{
     const cls = t.direction==='IN'?'in':(t.direction==='OUT'?'out':'');
@@ -1666,7 +1653,6 @@ function renderBulkAllTransactions(){
       <td class="mono" style="font-size:12px;color:var(--muted);">${escapeHtml(t.reference_no || '—')}</td>
       <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
       <td class="mono" style="text-align:right">${fmtAmt(t.balance)}</td>
-      <td class="mono" style="font-size:12px;color:var(--muted);">${fmtPostedDate(t.posted_date)}</td>
     </tr>`;
   });
   html += '</tbody></table>';
@@ -1694,7 +1680,6 @@ function renderBulkDetail(name){
     <th class="mono">Reference No.</th>
     <th class="mono" style="text-align:right">Amount</th>
     <th class="mono" style="text-align:right">Balance after</th>
-    <th class="mono">Posted</th>
   </tr></thead><tbody>`;
   rows.forEach(t=>{
     const cls = t.direction==='IN'?'in':(t.direction==='OUT'?'out':'');
@@ -1706,7 +1691,6 @@ function renderBulkDetail(name){
       <td class="mono" style="font-size:12px;color:var(--muted);">${escapeHtml(t.reference_no || '—')}</td>
       <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
       <td class="mono" style="text-align:right">${fmtAmt(t.balance)}</td>
-      <td class="mono" style="font-size:12px;color:var(--muted);">${fmtPostedDate(t.posted_date)}</td>
     </tr>`;
   });
   html += '</tbody></table>';
