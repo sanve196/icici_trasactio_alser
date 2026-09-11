@@ -394,6 +394,27 @@ def _normalize_format_b(rows, header_idx):
     return account_info, normalized
 
 
+def _normalize_for_match(s):
+    return re.sub(r"[^A-Z0-9]", "", (s or "").upper())
+
+
+def _is_truncated_account_name(counterparty, account_name, min_len=4):
+    """
+    True if `counterparty` looks like a truncated fragment of the statement's
+    own account name — i.e. the same string, just cut short by ICICI's
+    50-character narration limit landing at a different point on different
+    rows. Matching is strict (a real prefix of a known, specific string), so
+    it won't accidentally merge two unrelated companies.
+    """
+    if not counterparty or not account_name:
+        return False
+    cp_norm = _normalize_for_match(counterparty)
+    acc_norm = _normalize_for_match(account_name)
+    if len(cp_norm) < min_len or cp_norm == acc_norm:
+        return False
+    return acc_norm.startswith(cp_norm)
+
+
 def parse_workbook(file_stream):
     """
     Parse an uploaded ICICI statement (a file-like object; .xlsx or legacy .xls,
@@ -424,9 +445,13 @@ def parse_workbook(file_stream):
     else:
         account_info, normalized = _normalize_format_b(rows, header_idx)
 
+    account_name = account_info.get("account_name")
+
     results = []
     for tran_date, dr, cr, balance, narration, reference_no, posted_date, cheque_no in normalized:
         category, counterparty, direction = parse_narration(narration, dr, cr)
+        if account_name and _is_truncated_account_name(counterparty, account_name):
+            counterparty = account_name
         date_iso = _parse_date_value(tran_date)
         results.append({
             "date": date_iso,
