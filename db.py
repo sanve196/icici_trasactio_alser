@@ -68,11 +68,15 @@ def init_db():
                     cr NUMERIC,
                     balance NUMERIC,
                     narration TEXT,
-                    reference_no TEXT
+                    reference_no TEXT,
+                    posted_date TEXT,
+                    cheque_no TEXT
                 );
             """)
-            # Migration for databases created before reference_no existed.
+            # Migrations for databases created before these columns existed.
             cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS reference_no TEXT;")
+            cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS posted_date TEXT;")
+            cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS cheque_no TEXT;")
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_transactions_statement_id "
                 "ON transactions(statement_id);"
@@ -138,6 +142,8 @@ def save_statement(filename, account_info, summary, transactions):
                     t.get("balance"),
                     t.get("narration"),
                     t.get("reference_no"),
+                    t.get("posted_date"),
+                    t.get("cheque_no"),
                 )
                 for t in transactions
             ]
@@ -145,7 +151,8 @@ def save_statement(filename, account_info, summary, transactions):
                 cur,
                 """
                 INSERT INTO transactions
-                    (statement_id, tran_date, category, counterparty, direction, dr, cr, balance, narration, reference_no)
+                    (statement_id, tran_date, category, counterparty, direction, dr, cr, balance,
+                     narration, reference_no, posted_date, cheque_no)
                 VALUES %s
                 """,
                 rows,
@@ -185,7 +192,8 @@ def get_statement(statement_id):
                 return None, None
             cur.execute(
                 """
-                SELECT tran_date, category, counterparty, direction, dr, cr, balance, narration, reference_no
+                SELECT tran_date, category, counterparty, direction, dr, cr, balance, narration,
+                       reference_no, posted_date, cheque_no
                 FROM transactions
                 WHERE statement_id=%s
                 ORDER BY tran_date;
@@ -204,6 +212,8 @@ def get_statement(statement_id):
                     "balance": float(r["balance"]) if r["balance"] is not None else None,
                     "narration": r["narration"],
                     "reference_no": r["reference_no"],
+                    "posted_date": r["posted_date"],
+                    "cheque_no": r["cheque_no"],
                 }
                 for r in txn_rows
             ]

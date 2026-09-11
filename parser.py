@@ -274,6 +274,49 @@ def _format_reference(value):
     return str(value).strip() or None
 
 
+def _format_cheque_no(value):
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s or s == "-":
+        return None
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return s
+
+
+def _parse_posted_datetime(value):
+    """
+    Handles both posted-timestamp styles seen in ICICI exports:
+    - Format A's pstd_dt: '31DEC2023:12:16:06'
+    - Format B's Txn Posted Date: '01-04-2023 03:00:53 PM ' (or a real datetime cell)
+    Returns 'YYYY-MM-DD HH:MM:SS' (or just the date if no time is present), or None.
+    """
+    if isinstance(value, datetime):
+        if value.hour or value.minute or value.second:
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, str):
+        v = value.strip()
+        m = re.match(r"^(\d{2})([A-Za-z]{3})(\d{4}):(\d{2}):(\d{2}):(\d{2})$", v)
+        if m:
+            day, mon, year, hh, mm, ss = m.groups()
+            try:
+                dt = datetime.strptime(f"{day}{mon}{year} {hh}:{mm}:{ss}", "%d%b%Y %H:%M:%S")
+                return dt.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                pass
+        for fmt in ("%d-%m-%Y %I:%M:%S %p", "%d-%m-%Y", "%d/%m/%Y"):
+            try:
+                dt = datetime.strptime(v, fmt)
+                if dt.hour or dt.minute or dt.second:
+                    return dt.strftime("%Y-%m-%d %H:%M:%S")
+                return dt.strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+    return None
+
+
 def _normalize_format_a(rows, header_idx):
     header = [str(h).strip() if h else "" for h in rows[header_idx]]
     col_index = {name: idx for idx, name in enumerate(header)}
@@ -286,6 +329,8 @@ def _normalize_format_a(rows, header_idx):
 
     account_info = {"account_no": None, "account_name": None}
     has_tran_id = "Tran_ID" in col_index
+    has_pstd_dt = "pstd_dt" in col_index
+    has_inst_num = "Inst_Num" in col_index
     normalized = []
     for row in rows[header_idx + 1:]:
         if row is None or all(v is None for v in row):
@@ -307,6 +352,8 @@ def _normalize_format_a(rows, header_idx):
             row[col_index["Balance"]],
             row[col_index["Narration"]],
             _format_reference(row[col_index["Tran_ID"]]) if has_tran_id else None,
+            _parse_posted_datetime(row[col_index["pstd_dt"]]) if has_pstd_dt else None,
+            _format_cheque_no(row[col_index["Inst_Num"]]) if has_inst_num else None,
         ))
     return account_info, normalized
 
@@ -323,6 +370,8 @@ def _normalize_format_b(rows, header_idx):
 
     account_info = _extract_format_b_account_info(rows, header_idx)
     has_txn_id = "Transaction ID" in col_index
+    has_posted_date = "Txn Posted Date" in col_index
+    has_cheque_no = "ChequeNo." in col_index
 
     normalized = []
     for row in rows[header_idx + 1:]:
@@ -339,6 +388,8 @@ def _normalize_format_b(rows, header_idx):
             row[col_index["Available Balance(INR)"]],
             row[col_index["Description"]],
             _format_reference(row[col_index["Transaction ID"]]) if has_txn_id else None,
+            _parse_posted_datetime(row[col_index["Txn Posted Date"]]) if has_posted_date else None,
+            _format_cheque_no(row[col_index["ChequeNo."]]) if has_cheque_no else None,
         ))
     return account_info, normalized
 
@@ -374,7 +425,7 @@ def parse_workbook(file_stream):
         account_info, normalized = _normalize_format_b(rows, header_idx)
 
     results = []
-    for tran_date, dr, cr, balance, narration, reference_no in normalized:
+    for tran_date, dr, cr, balance, narration, reference_no, posted_date, cheque_no in normalized:
         category, counterparty, direction = parse_narration(narration, dr, cr)
         date_iso = _parse_date_value(tran_date)
         results.append({
@@ -387,6 +438,8 @@ def parse_workbook(file_stream):
             "balance": float(balance) if balance is not None else None,
             "narration": narration,
             "reference_no": reference_no,
+            "posted_date": posted_date,
+            "cheque_no": cheque_no,
         })
 
     if not results:
