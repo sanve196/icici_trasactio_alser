@@ -7,6 +7,7 @@ from parser import StatementFormatError, build_summary, parse_workbook
 from db import (
     check_connection, init_db, save_statement, list_statements, get_statement,
     delete_statement, save_batch, list_batches, get_batch, delete_batch,
+    get_account_type, set_account_type,
 )
 
 app = Flask(__name__, static_folder="static", static_url_path="")
@@ -58,6 +59,23 @@ def _analyze_one(upload):
     except Exception as e:
         return {"ok": False, "filename": filename, "error": f"Could not parse this file: {e}"}
 
+    account_no = account_info.get("account_no")
+
+    # Look up whether this account number has already been classified
+    # (Current / OD / custom label). If not, suggest one based on whether
+    # the statement's balance ever goes negative (a strong OD signal),
+    # but the person still has to confirm it in the UI.
+    account_type = None
+    try:
+        registered = get_account_type(account_no)
+        if registered:
+            account_type = registered.get("account_type")
+    except Exception as e:
+        print(f"Could not look up account type: {e}")
+
+    ever_negative = any((t.get("balance") or 0) < 0 for t in transactions)
+    suggested_type = "OD" if ever_negative else "Current"
+
     statement_id = None
     try:
         statement_id = save_statement(filename, account_info, summary, transactions)
@@ -68,8 +86,10 @@ def _analyze_one(upload):
         "ok": True,
         "filename": filename,
         "statement_id": statement_id,
-        "account_no": account_info.get("account_no"),
+        "account_no": account_no,
         "account_name": account_info.get("account_name"),
+        "account_type": account_type,
+        "suggested_type": suggested_type,
         "summary": summary,
         "transactions": transactions,
     }
@@ -94,6 +114,8 @@ def analyze():
         "filename": result["filename"],
         "account_no": result["account_no"],
         "account_name": result["account_name"],
+        "account_type": result["account_type"],
+        "suggested_type": result["suggested_type"],
         "summary": result["summary"],
         "transactions": result["transactions"],
     })
@@ -134,6 +156,8 @@ def analyze_bulk():
             "statement_id": result["statement_id"],
             "account_no": result["account_no"],
             "account_name": result["account_name"],
+            "account_type": result["account_type"],
+            "suggested_type": result["suggested_type"],
             "period_start": s["period_start"],
             "period_end": s["period_end"],
             "total_in": s["total_in"],
@@ -181,6 +205,26 @@ def analyze_bulk():
     })
 
 
+@app.post("/api/account-types")
+def api_set_account_type():
+    data = request.get_json(silent=True) or {}
+    account_no = data.get("account_no")
+    account_name = data.get("account_name")
+    account_type = (data.get("account_type") or "").strip()
+
+    if not account_no:
+        return jsonify({"error": "account_no is required."}), 400
+    if not account_type:
+        return jsonify({"error": "account_type is required."}), 400
+
+    try:
+        set_account_type(account_no, account_name, account_type)
+    except Exception as e:
+        return jsonify({"error": f"Could not save account type: {e}"}), 503
+
+    return jsonify({"account_no": account_no, "account_type": account_type})
+
+
 @app.get("/api/statements")
 def api_list_statements():
     try:
@@ -213,12 +257,19 @@ def api_get_statement(statement_id):
     if meta is None:
         return jsonify({"error": "That statement couldn't be found."}), 404
 
+    try:
+        registered = get_account_type(meta["account_no"])
+        account_type = registered.get("account_type") if registered else None
+    except Exception:
+        account_type = None
+
     summary = build_summary(transactions)
     return jsonify({
         "statement_id": meta["id"],
         "filename": meta["filename"],
         "account_no": meta["account_no"],
         "account_name": meta["account_name"],
+        "account_type": account_type,
         "summary": summary,
         "transactions": transactions,
     })
@@ -274,12 +325,19 @@ def api_get_batch(batch_id):
         except Exception as e:
             return jsonify({"error": f"Could not reload one of this batch's statements: {e}"}), 503
 
+        try:
+            registered = get_account_type(s["account_no"])
+            acct_type = registered.get("account_type") if registered else None
+        except Exception:
+            acct_type = None
+
         files_result.append({
             "filename": s["filename"],
             "status": "ok",
             "statement_id": s["id"],
             "account_no": s["account_no"],
             "account_name": s["account_name"],
+            "account_type": acct_type,
             "period_start": s["period_start"].isoformat() if s["period_start"] else None,
             "period_end": s["period_end"].isoformat() if s["period_end"] else None,
             "total_in": float(s["total_in"]) if s["total_in"] is not None else 0.0,

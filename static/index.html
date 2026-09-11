@@ -208,6 +208,42 @@
     padding:4px 8px;border-radius:6px;opacity:.75;
   }
   .delete-btn:hover{opacity:1;background:rgba(229,72,77,0.1);}
+  .modal-backdrop{
+    position:fixed;inset:0;background:rgba(20,15,10,0.55);
+    display:flex;align-items:center;justify-content:center;
+    z-index:100;padding:20px;
+  }
+  .modal-card{
+    background:var(--glass-strong);
+    -webkit-backdrop-filter:blur(24px) saturate(180%);
+    backdrop-filter:blur(24px) saturate(180%);
+    border:1px solid var(--glass-border);
+    border-radius:20px;
+    padding:28px;
+    max-width:440px;width:100%;
+    box-shadow:0 20px 60px rgba(0,0,0,0.25);
+  }
+  .modal-card h3{
+    font-family:'Poppins',sans-serif;font-weight:600;font-size:18px;margin:0 0 6px;color:var(--ink);
+  }
+  .modal-card .modal-sub{font-size:13px;color:var(--muted);margin-bottom:18px;line-height:1.5;}
+  .modal-card .modal-sub b{color:var(--ink);}
+  .type-options{display:flex;flex-direction:column;gap:8px;margin-bottom:18px;}
+  .type-option{
+    display:flex;align-items:center;gap:10px;
+    border:1px solid var(--glass-border);border-radius:12px;
+    padding:11px 14px;cursor:pointer;font-size:13.5px;
+    background:var(--glass);transition:border-color .15s, background .15s;
+  }
+  .type-option.active{border-color:var(--orange);background:var(--orange-soft);}
+  .type-option input[type=radio]{accent-color:var(--orange);}
+  .type-option input[type=text]{
+    flex:1;border:none;background:transparent;font-size:13.5px;color:var(--ink);outline:none;
+  }
+  .modal-actions{display:flex;justify-content:flex-end;gap:10px;}
+  .modal-actions .skip-link{
+    background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;padding:10px 4px;
+  }
 
   .table-card{
     background:var(--glass);
@@ -447,6 +483,34 @@
 
 </div>
 
+<div class="modal-backdrop" id="classifyModalBackdrop" style="display:none;">
+  <div class="modal-card">
+    <h3>New account detected</h3>
+    <div class="modal-sub">
+      <b id="classifyAccountName"></b> &middot; <span id="classifyAccountNo"></span><br>
+      What type of account is this? This is remembered going forward — you won't be asked again for this account number.
+    </div>
+    <div class="type-options" id="classifyTypeOptions">
+      <label class="type-option" data-value="Current">
+        <input type="radio" name="classifyType" value="Current" />
+        Current Account
+      </label>
+      <label class="type-option" data-value="OD">
+        <input type="radio" name="classifyType" value="OD" />
+        OD (Overdraft) Account
+      </label>
+      <label class="type-option" data-value="__custom__">
+        <input type="radio" name="classifyType" value="__custom__" />
+        <input type="text" id="classifyCustomLabel" placeholder="Other — type a label" />
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button class="skip-link" id="classifySkipBtn">Skip for now</button>
+      <button class="upload-btn" id="classifyConfirmBtn" style="padding:10px 22px;">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const fileInput = document.getElementById('fileInput');
 const uploadPanel = document.getElementById('uploadPanel');
@@ -512,6 +576,75 @@ function handleFiles(files){
   }
 }
 
+// ---- account-type classification (new-account detection) ----
+let classifyQueue = [];
+
+function queueIfUnknown(accountNo, accountName, accountType, suggestedType){
+  if(!accountNo || accountType) return; // already classified, nothing to ask
+  if(classifyQueue.some(q => q.accountNo === accountNo)) return; // already queued this batch
+  classifyQueue.push({ accountNo, accountName, suggestedType: suggestedType || 'Current' });
+}
+
+function processClassifyQueue(){
+  if(classifyQueue.length === 0) return;
+  const item = classifyQueue[0];
+  document.getElementById('classifyAccountName').textContent = item.accountName || 'Unnamed account';
+  document.getElementById('classifyAccountNo').textContent = item.accountNo;
+  document.getElementById('classifyCustomLabel').value = '';
+  document.querySelectorAll('#classifyTypeOptions .type-option').forEach(el=>el.classList.remove('active'));
+  document.querySelectorAll('#classifyTypeOptions input[type=radio]').forEach(r=>r.checked=false);
+  const preselect = item.suggestedType === 'OD' ? 'OD' : 'Current';
+  const preselectEl = document.querySelector(`#classifyTypeOptions input[value="${preselect}"]`);
+  if(preselectEl){
+    preselectEl.checked = true;
+    preselectEl.closest('.type-option').classList.add('active');
+  }
+  document.getElementById('classifyModalBackdrop').style.display = 'flex';
+}
+
+document.querySelectorAll('#classifyTypeOptions .type-option').forEach(opt=>{
+  opt.addEventListener('click', ()=>{
+    document.querySelectorAll('#classifyTypeOptions .type-option').forEach(el=>el.classList.remove('active'));
+    opt.classList.add('active');
+    const radio = opt.querySelector('input[type=radio]');
+    if(radio) radio.checked = true;
+    if(opt.dataset.value === '__custom__'){
+      document.getElementById('classifyCustomLabel').focus();
+    }
+  });
+});
+
+async function submitClassification(accountNo, accountName, accountType){
+  try{
+    await fetch('/api/account-types', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_no: accountNo, account_name: accountName, account_type: accountType })
+    });
+  }catch(err){
+    // Non-fatal — worst case it just asks again next time.
+  }
+}
+
+document.getElementById('classifyConfirmBtn').addEventListener('click', async ()=>{
+  const item = classifyQueue.shift();
+  const checked = document.querySelector('#classifyTypeOptions input[type=radio]:checked');
+  let type = checked ? checked.value : 'Current';
+  if(type === '__custom__'){
+    const custom = document.getElementById('classifyCustomLabel').value.trim();
+    type = custom || 'Current';
+  }
+  await submitClassification(item.accountNo, item.accountName, type);
+  document.getElementById('classifyModalBackdrop').style.display = 'none';
+  if(classifyQueue.length > 0) processClassifyQueue();
+});
+
+document.getElementById('classifySkipBtn').addEventListener('click', ()=>{
+  classifyQueue.shift();
+  document.getElementById('classifyModalBackdrop').style.display = 'none';
+  if(classifyQueue.length > 0) processClassifyQueue();
+});
+
 async function handleFile(file){
   errorBox.style.display = 'none';
   loadingBox.style.display = 'block';
@@ -531,6 +664,9 @@ async function handleFile(file){
     }
     showScreen('results');
     initApp(data.transactions, data.summary, data);
+    classifyQueue = [];
+    queueIfUnknown(data.account_no, data.account_name, data.account_type, data.suggested_type);
+    processClassifyQueue();
   }catch(err){
     loadingBox.style.display = 'none';
     showScreen('upload');
@@ -557,6 +693,13 @@ async function handleBulkFiles(files){
     }
     showScreen('bulk');
     initBulkApp(data);
+    classifyQueue = [];
+    (data.files || []).forEach(f=>{
+      if(f.status === 'ok'){
+        queueIfUnknown(f.account_no, f.account_name, f.account_type, f.suggested_type);
+      }
+    });
+    processClassifyQueue();
   }catch(err){
     loadingBox.style.display = 'none';
     showScreen('upload');
@@ -638,25 +781,48 @@ async function loadHistory(){
       if(rows.length===0){
         host.innerHTML = '<div class="empty">No statements analysed yet — upload one above.</div>';
       }else{
-        let html = `<table><thead><tr>
-          <th>File</th><th>Account</th><th>Period</th>
-          <th class="mono" style="text-align:right">Deposit</th>
-          <th class="mono" style="text-align:right">Withdrawal</th>
-          <th></th><th></th>
-        </tr></thead><tbody>`;
+        const groups = new Map();
         rows.forEach(r=>{
-          const acct = [r.account_name, r.account_no].filter(Boolean).join(' · ') || '—';
-          html += `<tr class="hist-row" data-id="${r.id}">
-            <td class="name">${escapeHtml(r.filename)}</td>
-            <td>${escapeHtml(acct)}</td>
-            <td class="mono">${fmtDate(r.period_start)} &ndash; ${fmtDate(r.period_end)}</td>
-            <td class="amt in">${fmtAmt(r.total_in)}</td>
-            <td class="amt out">${fmtAmt(r.total_out)}</td>
-            <td style="text-align:right;color:var(--orange-dark);font-weight:600;">View &rarr;</td>
-            <td style="text-align:right;"><button class="delete-btn" data-id="${r.id}" data-name="${escapeHtml(r.filename)}">Delete</button></td>
-          </tr>`;
+          const key = r.account_type || 'Unclassified';
+          if(!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(r);
         });
-        html += '</tbody></table>';
+        const priority = ['Current', 'OD'];
+        const keys = Array.from(groups.keys()).sort((a,b)=>{
+          if(a==='Unclassified') return 1;
+          if(b==='Unclassified') return -1;
+          const pa = priority.indexOf(a), pb = priority.indexOf(b);
+          if(pa!==-1 && pb!==-1) return pa-pb;
+          if(pa!==-1) return -1;
+          if(pb!==-1) return 1;
+          return a.localeCompare(b);
+        });
+
+        let html = '';
+        keys.forEach((key, idx)=>{
+          const groupRows = groups.get(key);
+          const label = key==='OD' ? 'OD (Overdraft) Accounts' : (key==='Unclassified' ? 'Unclassified' : `${key} Accounts`);
+          html += `<div style="margin:${idx?'22px':'0'} 0 10px;padding:0 4px;font-family:'Poppins',sans-serif;font-weight:600;font-size:13.5px;color:var(--ink);">${escapeHtml(label)} <span style="color:var(--muted);font-weight:400;font-family:'Inter',sans-serif;">(${groupRows.length})</span></div>`;
+          html += `<table><thead><tr>
+            <th>File</th><th>Account</th><th>Period</th>
+            <th class="mono" style="text-align:right">Deposit</th>
+            <th class="mono" style="text-align:right">Withdrawal</th>
+            <th></th><th></th>
+          </tr></thead><tbody>`;
+          groupRows.forEach(r=>{
+            const acct = [r.account_name, r.account_no].filter(Boolean).join(' · ') || '—';
+            html += `<tr class="hist-row" data-id="${r.id}">
+              <td class="name">${escapeHtml(r.filename)}</td>
+              <td>${escapeHtml(acct)}</td>
+              <td class="mono">${fmtDate(r.period_start)} &ndash; ${fmtDate(r.period_end)}</td>
+              <td class="amt in">${fmtAmt(r.total_in)}</td>
+              <td class="amt out">${fmtAmt(r.total_out)}</td>
+              <td style="text-align:right;color:var(--orange-dark);font-weight:600;">View &rarr;</td>
+              <td style="text-align:right;"><button class="delete-btn" data-id="${r.id}" data-name="${escapeHtml(r.filename)}">Delete</button></td>
+            </tr>`;
+          });
+          html += '</tbody></table>';
+        });
         host.innerHTML = html;
         document.querySelectorAll('.hist-row').forEach(tr=>{
           tr.addEventListener('click', ()=> openStatement(tr.dataset.id));

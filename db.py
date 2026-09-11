@@ -99,6 +99,14 @@ def init_db():
                     PRIMARY KEY (batch_id, statement_id)
                 );
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS account_types (
+                    account_no TEXT PRIMARY KEY,
+                    account_name TEXT,
+                    account_type TEXT NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT now()
+                );
+            """)
         conn.commit()
     finally:
         conn.close()
@@ -164,16 +172,18 @@ def save_statement(filename, account_info, summary, transactions):
 
 
 def list_statements():
-    """Return metadata for every saved statement, most recent first."""
+    """Return metadata for every saved statement, most recent first, with account_type joined in."""
     conn = get_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, filename, account_no, account_name, period_start, period_end,
-                       total_in, total_out, transaction_count, uploaded_at
-                FROM statements
-                ORDER BY uploaded_at DESC;
+                SELECT s.id, s.filename, s.account_no, s.account_name, s.period_start, s.period_end,
+                       s.total_in, s.total_out, s.transaction_count, s.uploaded_at,
+                       at.account_type
+                FROM statements s
+                LEFT JOIN account_types at ON at.account_no = s.account_no
+                ORDER BY s.uploaded_at DESC;
                 """
             )
             return [dict(r) for r in cur.fetchall()]
@@ -346,5 +356,51 @@ def delete_batch(batch_id, delete_statements_too=False):
                 cur.execute("DELETE FROM statements WHERE id = ANY(%s);", (statement_ids,))
         conn.commit()
         return deleted
+    finally:
+        conn.close()
+
+
+def get_account_type(account_no):
+    """Return {'account_no', 'account_name', 'account_type'} for a known account, or None."""
+    if not account_no:
+        return None
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM account_types WHERE account_no=%s;", (account_no,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def set_account_type(account_no, account_name, account_type):
+    """Register (or re-label) the account type for a given account number."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO account_types (account_no, account_name, account_type)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (account_no) DO UPDATE
+                    SET account_type = EXCLUDED.account_type,
+                        account_name = COALESCE(EXCLUDED.account_name, account_types.account_name);
+                """,
+                (account_no, account_name, account_type),
+            )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def list_account_types():
+    """Return every registered account -> type mapping."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM account_types ORDER BY created_at;")
+            return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
