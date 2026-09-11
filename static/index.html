@@ -353,9 +353,25 @@
       <span class="filter-label" id="bulkAmountLabel">Total activity</span>
       <input type="number" id="bulkAmountMin" placeholder="Min ₹" />
       <input type="number" id="bulkAmountMax" placeholder="Max ₹" />
-      <span class="filter-label">Date</span>
-      <input type="date" id="bulkDateFrom" />
-      <input type="date" id="bulkDateTo" />
+      <select id="bulkDateRangePreset">
+        <option value="">All dates</option>
+        <option value="today">Today</option>
+        <option value="this_week">This Week</option>
+        <option value="this_month">This Month</option>
+        <option value="mtd">Month to Date</option>
+        <option value="this_quarter">This Quarter</option>
+        <option value="qtd">Quarter to Date</option>
+        <option value="this_year">This Year</option>
+        <option value="ytd">Year to Date</option>
+        <option value="prev_day">Previous Day</option>
+        <option value="prev_week">Previous Week</option>
+        <option value="prev_month">Previous Month</option>
+        <option value="prev_quarter">Previous Quarter</option>
+        <option value="prev_year">Previous Year</option>
+        <option value="custom">Custom range…</option>
+      </select>
+      <input type="date" id="bulkDateFrom" style="display:none" />
+      <input type="date" id="bulkDateTo" style="display:none" />
       <button class="export-btn" id="bulkExportBtn">Export to Excel</button>
       <button class="export-btn outline" id="bulkExportPdfBtn">Export to PDF</button>
       <span class="count-note" id="bulkCountNote"></span>
@@ -395,7 +411,23 @@
       <span class="filter-label" id="amountLabel" style="display:none">Amount</span>
       <input type="number" id="amountMin" placeholder="Min ₹" style="display:none" />
       <input type="number" id="amountMax" placeholder="Max ₹" style="display:none" />
-      <span class="filter-label" id="dateLabel" style="display:none">Date</span>
+      <select id="dateRangePreset" style="display:none">
+        <option value="">All dates</option>
+        <option value="today">Today</option>
+        <option value="this_week">This Week</option>
+        <option value="this_month">This Month</option>
+        <option value="mtd">Month to Date</option>
+        <option value="this_quarter">This Quarter</option>
+        <option value="qtd">Quarter to Date</option>
+        <option value="this_year">This Year</option>
+        <option value="ytd">Year to Date</option>
+        <option value="prev_day">Previous Day</option>
+        <option value="prev_week">Previous Week</option>
+        <option value="prev_month">Previous Month</option>
+        <option value="prev_quarter">Previous Quarter</option>
+        <option value="prev_year">Previous Year</option>
+        <option value="custom">Custom range…</option>
+      </select>
       <input type="date" id="dateFrom" style="display:none" />
       <input type="date" id="dateTo" style="display:none" />
       <button class="export-btn" id="exportBtn" style="display:none">Export to Excel</button>
@@ -537,13 +569,13 @@ let txns = [];
 let counterparties = []; // merged, both directions
 let counterpartyCategories = new Map(); // name -> Set of categories seen for that counterparty
 let MAXAGG = 1;
-let state = { view:'list', tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1, detailCategory:'', detailDirection:'', detailAmountMin:null, detailAmountMax:null, detailDateFrom:null, detailDateTo:null };
+let state = { view:'list', tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1, detailCategory:'', detailDirection:'', detailAmountMin:null, detailAmountMax:null, detailDateFrom:null, detailDateTo:null, datePreset:'', detailDatePreset:'' };
 
 // ---- bulk upload state (separate from the single-file view above) ----
 let bulkTxns = [];
 let bulkCounterparties = [];
 let bulkFilesList = [];
-let bulkState = { tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null };
+let bulkState = { tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, datePreset:'', sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null };
 
 function fmtAmt(n){
   if(n===null||n===undefined) return '—';
@@ -558,6 +590,36 @@ function dirLabel(direction){
   if(direction==='IN') return 'Deposit';
   if(direction==='OUT') return 'Withdrawal';
   return direction || '—';
+}
+function presetToDateRange(preset){
+  const pad = n => String(n).padStart(2,'0');
+  const iso = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  const now = new Date();
+
+  const startOfWeek = d => { const x=new Date(d); const day=x.getDay(); const diff=(day===0?-6:1-day); x.setDate(x.getDate()+diff); return x; };
+  const startOfMonth = d => new Date(d.getFullYear(), d.getMonth(), 1);
+  const endOfMonth = d => new Date(d.getFullYear(), d.getMonth()+1, 0);
+  const startOfQuarter = d => new Date(d.getFullYear(), Math.floor(d.getMonth()/3)*3, 1);
+  const endOfQuarter = d => { const s=startOfQuarter(d); return new Date(s.getFullYear(), s.getMonth()+3, 0); };
+  const startOfYear = d => new Date(d.getFullYear(), 0, 1);
+  const endOfYear = d => new Date(d.getFullYear(), 11, 31);
+
+  switch(preset){
+    case 'today': return {from: iso(now), to: iso(now)};
+    case 'this_week': { const s=startOfWeek(now); const e=new Date(s); e.setDate(s.getDate()+6); return {from: iso(s), to: iso(e)}; }
+    case 'this_month': return {from: iso(startOfMonth(now)), to: iso(endOfMonth(now))};
+    case 'mtd': return {from: iso(startOfMonth(now)), to: iso(now)};
+    case 'this_quarter': return {from: iso(startOfQuarter(now)), to: iso(endOfQuarter(now))};
+    case 'qtd': return {from: iso(startOfQuarter(now)), to: iso(now)};
+    case 'this_year': return {from: iso(startOfYear(now)), to: iso(endOfYear(now))};
+    case 'ytd': return {from: iso(startOfYear(now)), to: iso(now)};
+    case 'prev_day': { const d=new Date(now); d.setDate(d.getDate()-1); return {from: iso(d), to: iso(d)}; }
+    case 'prev_week': { const s=startOfWeek(now); const ps=new Date(s); ps.setDate(s.getDate()-7); const pe=new Date(s); pe.setDate(s.getDate()-1); return {from: iso(ps), to: iso(pe)}; }
+    case 'prev_month': { const d=new Date(now.getFullYear(), now.getMonth()-1, 1); return {from: iso(startOfMonth(d)), to: iso(endOfMonth(d))}; }
+    case 'prev_quarter': { const q=Math.floor(now.getMonth()/3); const d=new Date(now.getFullYear(), q*3-3, 1); return {from: iso(startOfQuarter(d)), to: iso(endOfQuarter(d))}; }
+    case 'prev_year': { const d=new Date(now.getFullYear()-1, 0, 1); return {from: iso(startOfYear(d)), to: iso(endOfYear(d))}; }
+    default: return null;
+  }
 }
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -792,13 +854,14 @@ function initApp(transactions, summary, meta){
     const o = document.createElement('option'); o.value=c; o.textContent=c; catSel.appendChild(o);
   });
 
-  state = { view:'list', tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1, detailCategory:'', detailDirection:'', detailAmountMin:null, detailAmountMax:null, detailDateFrom:null, detailDateTo:null };
+  state = { view:'list', tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null, detailSortKey:'date', detailSortDir:-1, detailCategory:'', detailDirection:'', detailAmountMin:null, detailAmountMax:null, detailDateFrom:null, detailDateTo:null, datePreset:'', detailDatePreset:'' };
   document.querySelectorAll('#tabBar .tab').forEach(t=>t.classList.toggle('active', t.dataset.tab==='counterparties'));
   document.getElementById('searchBox').value = '';
   document.getElementById('amountMin').value = '';
   document.getElementById('amountMax').value = '';
   document.getElementById('dateFrom').value = '';
   document.getElementById('dateTo').value = '';
+  document.getElementById('dateRangePreset').value = '';
   document.getElementById('catFilter').value = '';
   document.getElementById('amountLabel').textContent = 'Total activity';
   render();
@@ -812,13 +875,14 @@ document.querySelectorAll('#tabBar .tab').forEach(t=>t.addEventListener('click',
   state.page = 1; state.selected = null;
   state.sortKey = state.tab==='all' ? 'date' : 'activity';
   state.sortDir = -1;
-  state.search = ''; state.category = ''; state.amountMin = null; state.amountMax = null; state.dateFrom = null; state.dateTo = null;
+  state.search = ''; state.category = ''; state.amountMin = null; state.amountMax = null; state.dateFrom = null; state.dateTo = null; state.datePreset = '';
   document.getElementById('searchBox').value = '';
   document.getElementById('catFilter').value = '';
   document.getElementById('amountMin').value = '';
   document.getElementById('amountMax').value = '';
   document.getElementById('dateFrom').value = '';
   document.getElementById('dateTo').value = '';
+  document.getElementById('dateRangePreset').value = '';
   document.getElementById('amountLabel').textContent = state.tab==='all' ? 'Amount' : 'Total activity';
   document.getElementById('searchBox').placeholder = state.tab==='all' ? 'Search counterparty or category…' : 'Search counterparty…';
   render();
@@ -846,6 +910,26 @@ document.getElementById('dateFrom').addEventListener('change', e=>{
 });
 document.getElementById('dateTo').addEventListener('change', e=>{
   state.dateTo = e.target.value || null;
+  state.page = 1; render();
+});
+document.getElementById('dateRangePreset').addEventListener('change', e=>{
+  const val = e.target.value;
+  state.datePreset = val;
+  if(val === 'custom'){
+    document.getElementById('dateFrom').style.display = 'inline-block';
+    document.getElementById('dateTo').style.display = 'inline-block';
+  }else{
+    document.getElementById('dateFrom').style.display = 'none';
+    document.getElementById('dateTo').style.display = 'none';
+    if(val === ''){
+      state.dateFrom = null; state.dateTo = null;
+    }else{
+      const range = presetToDateRange(val);
+      state.dateFrom = range.from; state.dateTo = range.to;
+    }
+    document.getElementById('dateFrom').value = state.dateFrom || '';
+    document.getElementById('dateTo').value = state.dateTo || '';
+  }
   state.page = 1; render();
 });
 document.getElementById('exportBtn').addEventListener('click', ()=>{
@@ -1053,9 +1137,25 @@ function renderCounterpartyDetail(name){
       <span class="filter-label">Amount</span>
       <input type="number" id="detailAmountMin" placeholder="Min ₹" value="${state.detailAmountMin!=null?state.detailAmountMin:''}" />
       <input type="number" id="detailAmountMax" placeholder="Max ₹" value="${state.detailAmountMax!=null?state.detailAmountMax:''}" />
-      <span class="filter-label">Date</span>
-      <input type="date" id="detailDateFrom" value="${state.detailDateFrom||''}" />
-      <input type="date" id="detailDateTo" value="${state.detailDateTo||''}" />
+      <select id="detailDateRangePreset">
+        <option value="" ${!state.detailDatePreset ? 'selected':''}>All dates</option>
+        <option value="today" ${state.detailDatePreset==='today'?'selected':''}>Today</option>
+        <option value="this_week" ${state.detailDatePreset==='this_week'?'selected':''}>This Week</option>
+        <option value="this_month" ${state.detailDatePreset==='this_month'?'selected':''}>This Month</option>
+        <option value="mtd" ${state.detailDatePreset==='mtd'?'selected':''}>Month to Date</option>
+        <option value="this_quarter" ${state.detailDatePreset==='this_quarter'?'selected':''}>This Quarter</option>
+        <option value="qtd" ${state.detailDatePreset==='qtd'?'selected':''}>Quarter to Date</option>
+        <option value="this_year" ${state.detailDatePreset==='this_year'?'selected':''}>This Year</option>
+        <option value="ytd" ${state.detailDatePreset==='ytd'?'selected':''}>Year to Date</option>
+        <option value="prev_day" ${state.detailDatePreset==='prev_day'?'selected':''}>Previous Day</option>
+        <option value="prev_week" ${state.detailDatePreset==='prev_week'?'selected':''}>Previous Week</option>
+        <option value="prev_month" ${state.detailDatePreset==='prev_month'?'selected':''}>Previous Month</option>
+        <option value="prev_quarter" ${state.detailDatePreset==='prev_quarter'?'selected':''}>Previous Quarter</option>
+        <option value="prev_year" ${state.detailDatePreset==='prev_year'?'selected':''}>Previous Year</option>
+        <option value="custom" ${state.detailDatePreset==='custom'?'selected':''}>Custom range…</option>
+      </select>
+      <input type="date" id="detailDateFrom" value="${state.detailDateFrom||''}" style="${state.detailDatePreset==='custom'?'':'display:none'}" />
+      <input type="date" id="detailDateTo" value="${state.detailDateTo||''}" style="${state.detailDatePreset==='custom'?'':'display:none'}" />
       <span class="count-note">${rows.length.toLocaleString('en-IN')} of ${allRows.length.toLocaleString('en-IN')} transactions</span>
     </div>
     <div class="detail-stats">
@@ -1122,6 +1222,19 @@ function renderCounterpartyDetail(name){
   });
   document.getElementById('detailDateTo').addEventListener('change', e=>{
     state.detailDateTo = e.target.value || null; render();
+  });
+  document.getElementById('detailDateRangePreset').addEventListener('change', e=>{
+    const val = e.target.value;
+    state.detailDatePreset = val;
+    if(val === 'custom'){
+      // leave existing from/to as-is so the user can fill them in
+    }else if(val === ''){
+      state.detailDateFrom = null; state.detailDateTo = null;
+    }else{
+      const range = presetToDateRange(val);
+      state.detailDateFrom = range.from; state.detailDateTo = range.to;
+    }
+    render();
   });
   document.getElementById('detailExportBtn').addEventListener('click', ()=>{
     exportTransactionsToExcel(sorted, name.replace(/[^a-z0-9]+/gi,'_'));
@@ -1296,7 +1409,7 @@ function attachRowClicks(){
       state.detailSortKey = 'date'; state.detailSortDir = -1;
       state.detailCategory = ''; state.detailDirection = '';
       state.detailAmountMin = null; state.detailAmountMax = null;
-      state.detailDateFrom = null; state.detailDateTo = null;
+      state.detailDateFrom = null; state.detailDateTo = null; state.detailDatePreset = '';
       render();
     });
   });
@@ -1324,7 +1437,7 @@ function render(){
     document.getElementById('amountLabel').style.display = 'none';
     document.getElementById('amountMin').style.display = 'none';
     document.getElementById('amountMax').style.display = 'none';
-    document.getElementById('dateLabel').style.display = 'none';
+    document.getElementById('dateRangePreset').style.display = 'none';
     document.getElementById('dateFrom').style.display = 'none';
     document.getElementById('dateTo').style.display = 'none';
     document.getElementById('exportBtn').style.display = 'none';
@@ -1341,9 +1454,9 @@ function render(){
   document.getElementById('amountLabel').style.display = 'inline';
   document.getElementById('amountMin').style.display = 'inline-block';
   document.getElementById('amountMax').style.display = 'inline-block';
-  document.getElementById('dateLabel').style.display = 'inline';
-  document.getElementById('dateFrom').style.display = 'inline-block';
-  document.getElementById('dateTo').style.display = 'inline-block';
+  document.getElementById('dateRangePreset').style.display = 'inline-block';
+  document.getElementById('dateFrom').style.display = state.datePreset==='custom' ? 'inline-block' : 'none';
+  document.getElementById('dateTo').style.display = state.datePreset==='custom' ? 'inline-block' : 'none';
   document.getElementById('exportBtn').style.display = 'inline-flex';
   document.getElementById('exportPdfBtn').style.display = 'inline-flex';
   const sortKeyForDate = state.tab==='all' ? 'date' : 'last';
@@ -1361,7 +1474,7 @@ function initBulkApp(data){
   bulkTxns = (data.transactions || []).map(t => ({...t, amount: t.direction==='IN' ? t.cr : t.dr}));
   const summary = data.combined_summary;
   bulkCounterparties = summary ? mergeCounterparties(summary.payers, summary.payees) : [];
-  bulkState = { tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null };
+  bulkState = { tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, datePreset:'', sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null };
 
   const okCount = bulkFilesList.filter(f=>f.status==='ok').length;
   const failCount = bulkFilesList.length - okCount;
@@ -1392,6 +1505,7 @@ function initBulkApp(data){
   document.getElementById('bulkAmountMax').value = '';
   document.getElementById('bulkDateFrom').value = '';
   document.getElementById('bulkDateTo').value = '';
+  document.getElementById('bulkDateRangePreset').value = '';
   document.getElementById('bulkAmountLabel').textContent = 'Total activity';
 
   renderBulkWarnings(data.warnings || []);
@@ -1449,7 +1563,7 @@ document.querySelectorAll('#bulkTabBar .tab').forEach(t=>t.addEventListener('cli
   t.classList.add('active');
   bulkState.tab = t.dataset.btab;
   bulkState.page = 1; bulkState.search=''; bulkState.category='';
-  bulkState.amountMin = null; bulkState.amountMax = null; bulkState.dateFrom = null; bulkState.dateTo = null;
+  bulkState.amountMin = null; bulkState.amountMax = null; bulkState.dateFrom = null; bulkState.dateTo = null; bulkState.datePreset = '';
   bulkState.sortKey = bulkState.tab==='all' ? 'date' : 'activity';
   bulkState.sortDir = -1;
   document.getElementById('bulkSearchBox').value = '';
@@ -1458,6 +1572,7 @@ document.querySelectorAll('#bulkTabBar .tab').forEach(t=>t.addEventListener('cli
   document.getElementById('bulkAmountMax').value = '';
   document.getElementById('bulkDateFrom').value = '';
   document.getElementById('bulkDateTo').value = '';
+  document.getElementById('bulkDateRangePreset').value = '';
   document.getElementById('bulkAmountLabel').textContent = bulkState.tab==='all' ? 'Amount' : 'Total activity';
   document.getElementById('bulkSearchBox').placeholder = bulkState.tab==='all' ? 'Search counterparty or category…' : 'Search counterparty…';
   renderBulk();
@@ -1486,6 +1601,26 @@ document.getElementById('bulkDateFrom').addEventListener('change', e=>{
 });
 document.getElementById('bulkDateTo').addEventListener('change', e=>{
   bulkState.dateTo = e.target.value || null; bulkState.page = 1; renderBulk();
+});
+document.getElementById('bulkDateRangePreset').addEventListener('change', e=>{
+  const val = e.target.value;
+  bulkState.datePreset = val;
+  if(val === 'custom'){
+    document.getElementById('bulkDateFrom').style.display = 'inline-block';
+    document.getElementById('bulkDateTo').style.display = 'inline-block';
+  }else{
+    document.getElementById('bulkDateFrom').style.display = 'none';
+    document.getElementById('bulkDateTo').style.display = 'none';
+    if(val === ''){
+      bulkState.dateFrom = null; bulkState.dateTo = null;
+    }else{
+      const range = presetToDateRange(val);
+      bulkState.dateFrom = range.from; bulkState.dateTo = range.to;
+    }
+    document.getElementById('bulkDateFrom').value = bulkState.dateFrom || '';
+    document.getElementById('bulkDateTo').value = bulkState.dateTo || '';
+  }
+  bulkState.page = 1; renderBulk();
 });
 document.getElementById('bulkExportBtn').addEventListener('click', ()=>{
   if(bulkState.tab==='all'){
