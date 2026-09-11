@@ -266,6 +266,14 @@ def _parse_date_value(value):
     return None
 
 
+def _format_reference(value):
+    if value is None:
+        return None
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip() or None
+
+
 def _normalize_format_a(rows, header_idx):
     header = [str(h).strip() if h else "" for h in rows[header_idx]]
     col_index = {name: idx for idx, name in enumerate(header)}
@@ -277,6 +285,7 @@ def _normalize_format_a(rows, header_idx):
         )
 
     account_info = {"account_no": None, "account_name": None}
+    has_tran_id = "Tran_ID" in col_index
     normalized = []
     for row in rows[header_idx + 1:]:
         if row is None or all(v is None for v in row):
@@ -297,6 +306,7 @@ def _normalize_format_a(rows, header_idx):
             row[col_index["Cr_Amt"]] or 0,
             row[col_index["Balance"]],
             row[col_index["Narration"]],
+            _format_reference(row[col_index["Tran_ID"]]) if has_tran_id else None,
         ))
     return account_info, normalized
 
@@ -312,6 +322,7 @@ def _normalize_format_b(rows, header_idx):
         )
 
     account_info = _extract_format_b_account_info(rows, header_idx)
+    has_txn_id = "Transaction ID" in col_index
 
     normalized = []
     for row in rows[header_idx + 1:]:
@@ -327,6 +338,7 @@ def _normalize_format_b(rows, header_idx):
             cr,
             row[col_index["Available Balance(INR)"]],
             row[col_index["Description"]],
+            _format_reference(row[col_index["Transaction ID"]]) if has_txn_id else None,
         ))
     return account_info, normalized
 
@@ -362,7 +374,7 @@ def parse_workbook(file_stream):
         account_info, normalized = _normalize_format_b(rows, header_idx)
 
     results = []
-    for tran_date, dr, cr, balance, narration in normalized:
+    for tran_date, dr, cr, balance, narration, reference_no in normalized:
         category, counterparty, direction = parse_narration(narration, dr, cr)
         date_iso = _parse_date_value(tran_date)
         results.append({
@@ -374,6 +386,7 @@ def parse_workbook(file_stream):
             "cr": float(cr) if cr else 0.0,
             "balance": float(balance) if balance is not None else None,
             "narration": narration,
+            "reference_no": reference_no,
         })
 
     if not results:

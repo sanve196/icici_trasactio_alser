@@ -552,6 +552,11 @@ function fmtDate(iso){
   const d = new Date(iso+'T00:00:00');
   return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
 }
+function dirLabel(direction){
+  if(direction==='IN') return 'Deposit';
+  if(direction==='OUT') return 'Withdrawal';
+  return direction || '—';
+}
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -571,8 +576,8 @@ async function loadHistory(){
       }else{
         let html = `<table><thead><tr>
           <th>File</th><th>Account</th><th>Period</th>
-          <th class="mono" style="text-align:right">In</th>
-          <th class="mono" style="text-align:right">Out</th>
+          <th class="mono" style="text-align:right">Deposit</th>
+          <th class="mono" style="text-align:right">Withdrawal</th>
           <th></th><th></th>
         </tr></thead><tbody>`;
         rows.forEach(r=>{
@@ -638,8 +643,8 @@ async function loadBatches(){
     }
     let html = `<table><thead><tr>
       <th>Uploaded</th><th class="mono">Files</th><th class="mono">Txns</th>
-      <th class="mono" style="text-align:right">In</th>
-      <th class="mono" style="text-align:right">Out</th>
+      <th class="mono" style="text-align:right">Deposit</th>
+      <th class="mono" style="text-align:right">Withdrawal</th>
       <th></th><th></th>
     </tr></thead><tbody>`;
     rows.forEach(r=>{
@@ -769,8 +774,8 @@ function initApp(transactions, summary, meta){
   MAXAGG = Math.max(1, ...counterparties.map(a=>a.activity));
 
   const stats = [
-    {label:'Total Money In', value: fmtAmt(summary.total_in), cls:'in'},
-    {label:'Total Money Out', value: fmtAmt(summary.total_out), cls:'out'},
+    {label:'Total Deposits', value: fmtAmt(summary.total_in), cls:'in'},
+    {label:'Total Withdrawals', value: fmtAmt(summary.total_out), cls:'out'},
     {label:'Net Movement', value: fmtAmt(summary.net), cls:'net ' + (summary.net>=0?'pos':'neg')},
     {label:'Counterparties', value: counterparties.length.toLocaleString('en-IN'), cls:''},
   ];
@@ -897,8 +902,8 @@ function exportCounterpartiesToExcel(rows, filenamePrefix){
     Transactions: r.count,
     'First activity': r.first || '',
     'Last activity': r.last || '',
-    'Money in': r.total_in || 0,
-    'Money out': r.total_out || 0
+    'Deposit': r.total_in || 0,
+    'Withdrawal': r.total_out || 0
   }));
   const ws = XLSX.utils.json_to_sheet(data);
   ws['!cols'] = [{wch:30},{wch:12},{wch:14},{wch:14},{wch:16},{wch:16}];
@@ -934,7 +939,7 @@ function exportCounterpartiesToPDF(rows, filenamePrefix, reportTitle){
 
   doc.autoTable({
     startY: y,
-    head: [['Counterparty','Txns','First activity','Last activity','Money in','Money out']],
+    head: [['Counterparty','Txns','First activity','Last activity','Deposit','Withdrawal']],
     body: rows.map(r=>[
       r.name, r.count, fmtDate(r.first), fmtDate(r.last),
       r.total_in ? fmtAmt(r.total_in) : '—',
@@ -968,8 +973,8 @@ function renderCounterpartyList(){
     <th data-k="name">Counterparty</th>
     <th data-k="count" class="mono">Txns</th>
     <th data-k="last" class="mono">Last activity</th>
-    <th data-k="in" class="mono" style="text-align:right">Money in</th>
-    <th data-k="out" class="mono" style="text-align:right">Money out</th>
+    <th data-k="in" class="mono" style="text-align:right">Deposit</th>
+    <th data-k="out" class="mono" style="text-align:right">Withdrawal</th>
   </tr></thead><tbody>`;
   pageRows.forEach(r=>{
     const pctIn = (r.total_in/MAXAGG*100).toFixed(1);
@@ -1039,9 +1044,9 @@ function renderCounterpartyDetail(name){
     <div class="controls" style="margin-top:2px;">
       <select id="detailCategoryFilter"><option value="">All categories</option>${catOptions}</select>
       <select id="detailDirectionFilter">
-        <option value="" ${state.detailDirection===''?'selected':''}>In &amp; out</option>
-        <option value="IN" ${state.detailDirection==='IN'?'selected':''}>Money in only</option>
-        <option value="OUT" ${state.detailDirection==='OUT'?'selected':''}>Money out only</option>
+        <option value="" ${state.detailDirection===''?'selected':''}>Deposits &amp; Withdrawals</option>
+        <option value="IN" ${state.detailDirection==='IN'?'selected':''}>Deposits only</option>
+        <option value="OUT" ${state.detailDirection==='OUT'?'selected':''}>Withdrawals only</option>
       </select>
       <span class="filter-label">Amount</span>
       <input type="number" id="detailAmountMin" placeholder="Min ₹" value="${state.detailAmountMin!=null?state.detailAmountMin:''}" />
@@ -1052,8 +1057,8 @@ function renderCounterpartyDetail(name){
       <span class="count-note">${rows.length.toLocaleString('en-IN')} of ${allRows.length.toLocaleString('en-IN')} transactions</span>
     </div>
     <div class="detail-stats">
-      <div class="stat"><div class="label">Money in</div><div class="value in">${fmtAmt(totalIn)}</div></div>
-      <div class="stat"><div class="label">Money out</div><div class="value out">${fmtAmt(totalOut)}</div></div>
+      <div class="stat"><div class="label">Deposit</div><div class="value in">${fmtAmt(totalIn)}</div></div>
+      <div class="stat"><div class="label">Withdrawal</div><div class="value out">${fmtAmt(totalOut)}</div></div>
       <div class="stat"><div class="label">Net</div><div class="value ${totalIn-totalOut>=0?'net pos':'net neg'}">${fmtAmt(totalIn-totalOut)}</div></div>
       <div class="stat"><div class="label">Transactions</div><div class="value">${rows.length}</div></div>
       <div class="stat">
@@ -1071,6 +1076,7 @@ function renderCounterpartyDetail(name){
       <th data-k="date" class="mono">Date</th>
       <th data-k="category">Category</th>
       <th>Direction</th>
+      <th class="mono">Reference No.</th>
       <th data-k="amount" class="mono" style="text-align:right">Amount</th>
       <th class="mono" style="text-align:right">Balance after</th>
     </tr></thead><tbody>`;
@@ -1079,7 +1085,8 @@ function renderCounterpartyDetail(name){
       html += `<tr>
         <td class="mono">${fmtDate(t.date)}</td>
         <td>${escapeHtml(t.category)}</td>
-        <td><span class="tag ${t.direction}">${t.direction}</span></td>
+        <td><span class="tag ${t.direction}">${dirLabel(t.direction)}</span></td>
+        <td class="mono" style="font-size:12px;color:var(--muted);">${escapeHtml(t.reference_no || '—')}</td>
         <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
         <td class="mono" style="text-align:right">${fmtAmt(t.balance)}</td>
       </tr>`;
@@ -1168,14 +1175,15 @@ function exportTransactionsToExcel(rows, filenamePrefix){
     Date: t.date || '',
     Category: t.category,
     Counterparty: t.counterparty,
-    Direction: t.direction,
-    Debit: t.dr || 0,
-    Credit: t.cr || 0,
+    Direction: dirLabel(t.direction),
+    'Reference No.': t.reference_no || '',
+    Withdrawal: t.dr || 0,
+    Deposit: t.cr || 0,
     Balance: t.balance,
     Narration: t.narration || ''
   }));
   const ws = XLSX.utils.json_to_sheet(data);
-  ws['!cols'] = [{wch:12},{wch:24},{wch:28},{wch:10},{wch:14},{wch:14},{wch:14},{wch:40}];
+  ws['!cols'] = [{wch:12},{wch:24},{wch:28},{wch:12},{wch:16},{wch:14},{wch:14},{wch:14},{wch:40}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Transactions');
   const stamp = new Date().toISOString().slice(0,10);
@@ -1206,14 +1214,14 @@ function exportTransactionsToPDF(rows, filenamePrefix, reportTitle){
   if(acctLine){ doc.text(`Account: ${acctLine}`, 40, y); y += 14; }
   if(currentMeta.filename){ doc.text(`Source file: ${currentMeta.filename}`, 40, y); y += 14; }
   doc.text(`Generated: ${new Date().toLocaleString('en-IN')}`, 40, y); y += 14;
-  doc.text(`${rows.length.toLocaleString('en-IN')} transactions — Money in: ${fmtAmt(totalIn)}  ·  Money out: ${fmtAmt(totalOut)}`, 40, y);
+  doc.text(`${rows.length.toLocaleString('en-IN')} transactions — Deposits: ${fmtAmt(totalIn)}  ·  Withdrawals: ${fmtAmt(totalOut)}`, 40, y);
   y += 14;
 
   doc.autoTable({
     startY: y,
-    head: [['Date','Category','Counterparty','Direction','Amount','Balance']],
+    head: [['Date','Category','Counterparty','Direction','Reference No.','Amount','Balance']],
     body: rows.map(t=>[
-      fmtDate(t.date), t.category, t.counterparty, t.direction, fmtAmt(t.amount), fmtAmt(t.balance)
+      fmtDate(t.date), t.category, t.counterparty, dirLabel(t.direction), t.reference_no || '—', fmtAmt(t.amount), fmtAmt(t.balance)
     ]),
     styles: { fontSize: 8, textColor: [35,38,47] },
     headStyles: { fillColor: [245,130,31], textColor: [255,255,255], fontStyle: 'bold' },
@@ -1244,6 +1252,7 @@ function renderAllTable(){
     <th data-k="category">Category</th>
     <th data-k="counterparty">Counterparty</th>
     <th>Direction</th>
+    <th class="mono">Reference No.</th>
     <th data-k="amount" class="mono" style="text-align:right">Amount</th>
   </tr></thead><tbody>`;
   pageRows.forEach(t=>{
@@ -1252,7 +1261,8 @@ function renderAllTable(){
       <td class="mono">${fmtDate(t.date)}</td>
       <td>${escapeHtml(t.category)}</td>
       <td class="name">${escapeHtml(t.counterparty)}</td>
-      <td><span class="tag ${t.direction}">${t.direction}</span></td>
+      <td><span class="tag ${t.direction}">${dirLabel(t.direction)}</span></td>
+      <td class="mono" style="font-size:12px;color:var(--muted);">${escapeHtml(t.reference_no || '—')}</td>
       <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
     </tr>`;
   });
@@ -1354,8 +1364,8 @@ function initBulkApp(data){
     `${bulkFilesList.length} file${bulkFilesList.length===1?'':'s'} (${okCount} parsed${failCount ? ', ' + failCount + ' failed' : ''})`;
 
   const stats = summary ? [
-    {label:'Total Money In', value: fmtAmt(summary.total_in), cls:'in'},
-    {label:'Total Money Out', value: fmtAmt(summary.total_out), cls:'out'},
+    {label:'Total Deposits', value: fmtAmt(summary.total_in), cls:'in'},
+    {label:'Total Withdrawals', value: fmtAmt(summary.total_out), cls:'out'},
     {label:'Net Movement', value: fmtAmt(summary.net), cls:'net ' + (summary.net>=0?'pos':'neg')},
     {label:'Counterparties', value: bulkCounterparties.length.toLocaleString('en-IN'), cls:''},
   ] : [];
@@ -1395,8 +1405,8 @@ function renderBulkWarnings(warnings){
 function renderBulkFileList(){
   let html = `<table><thead><tr>
     <th>File</th><th>Account</th><th>Period</th>
-    <th class="mono" style="text-align:right">In</th>
-    <th class="mono" style="text-align:right">Out</th>
+    <th class="mono" style="text-align:right">Deposit</th>
+    <th class="mono" style="text-align:right">Withdrawal</th>
     <th>Status</th>
   </tr></thead><tbody>`;
   bulkFilesList.forEach(f=>{
@@ -1584,8 +1594,8 @@ function renderBulkCounterpartyList(){
   const maxAgg = Math.max(1, ...filtered.map(r=>r.activity));
   let html = `<table><thead><tr>
     <th>Counterparty</th><th class="mono">Files</th><th class="mono">Txns</th>
-    <th class="mono" style="text-align:right">Money in</th>
-    <th class="mono" style="text-align:right">Money out</th>
+    <th class="mono" style="text-align:right">Deposit</th>
+    <th class="mono" style="text-align:right">Withdrawal</th>
   </tr></thead><tbody>`;
   pageRows.forEach(r=>{
     const pctIn = (r.total_in/maxAgg*100).toFixed(1);
@@ -1623,6 +1633,7 @@ function renderBulkAllTransactions(){
   }
   let html = `<table><thead><tr>
     <th class="mono">Date</th><th>File</th><th>Category</th><th>Counterparty</th><th>Direction</th>
+    <th class="mono">Reference No.</th>
     <th class="mono" style="text-align:right">Amount</th>
   </tr></thead><tbody>`;
   pageRows.forEach(t=>{
@@ -1632,7 +1643,8 @@ function renderBulkAllTransactions(){
       <td style="font-size:12px;color:var(--muted);">${escapeHtml(t.source_filename||'')}</td>
       <td>${escapeHtml(t.category)}</td>
       <td class="name">${escapeHtml(t.counterparty)}</td>
-      <td><span class="tag ${t.direction}">${t.direction}</span></td>
+      <td><span class="tag ${t.direction}">${dirLabel(t.direction)}</span></td>
+      <td class="mono" style="font-size:12px;color:var(--muted);">${escapeHtml(t.reference_no || '—')}</td>
       <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
     </tr>`;
   });
@@ -1649,8 +1661,8 @@ function renderBulkDetail(name){
 
   document.getElementById('bulkDetailName').textContent = name;
   document.getElementById('bulkDetailStats').innerHTML = `
-    <div class="stat"><div class="label">Money in</div><div class="value in">${fmtAmt(totalIn)}</div></div>
-    <div class="stat"><div class="label">Money out</div><div class="value out">${fmtAmt(totalOut)}</div></div>
+    <div class="stat"><div class="label">Deposit</div><div class="value in">${fmtAmt(totalIn)}</div></div>
+    <div class="stat"><div class="label">Withdrawal</div><div class="value out">${fmtAmt(totalOut)}</div></div>
     <div class="stat"><div class="label">Net</div><div class="value ${totalIn-totalOut>=0?'net pos':'net neg'}">${fmtAmt(totalIn-totalOut)}</div></div>
     <div class="stat"><div class="label">Transactions</div><div class="value">${rows.length}</div></div>
     <div class="stat"><div class="label">Files</div><div class="value">${fileCount}</div></div>
@@ -1658,6 +1670,7 @@ function renderBulkDetail(name){
 
   let html = `<table><thead><tr>
     <th class="mono">Date</th><th>File</th><th>Category</th><th>Direction</th>
+    <th class="mono">Reference No.</th>
     <th class="mono" style="text-align:right">Amount</th>
     <th class="mono" style="text-align:right">Balance after</th>
   </tr></thead><tbody>`;
@@ -1667,7 +1680,8 @@ function renderBulkDetail(name){
       <td class="mono">${fmtDate(t.date)}</td>
       <td style="font-size:12px;color:var(--muted);">${escapeHtml(t.source_filename||'')}</td>
       <td>${escapeHtml(t.category)}</td>
-      <td><span class="tag ${t.direction}">${t.direction}</span></td>
+      <td><span class="tag ${t.direction}">${dirLabel(t.direction)}</span></td>
+      <td class="mono" style="font-size:12px;color:var(--muted);">${escapeHtml(t.reference_no || '—')}</td>
       <td class="amt ${cls}">${fmtAmt(t.amount)}</td>
       <td class="mono" style="text-align:right">${fmtAmt(t.balance)}</td>
     </tr>`;
