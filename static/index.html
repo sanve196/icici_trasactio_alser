@@ -187,6 +187,46 @@
   input[type=date]{width:150px;}
   input[type=text]::placeholder{color:var(--muted);}
   input:focus, select:focus{outline:2px solid rgba(245,130,31,0.35);}
+
+  /* Custom themed dropdown (replaces the native <select> popup, which browsers
+     render outside page CSS control). The original <select> stays in the DOM
+     — fully functional for existing .value/change-event code — just visually
+     hidden, with this styled trigger+menu sitting on top of it. */
+  select.csel-native{
+    position:absolute !important; opacity:0; width:0; height:0;
+    padding:0; margin:0; border:0; pointer-events:none;
+  }
+  .csel-wrap{position:relative;display:inline-flex;vertical-align:middle;}
+  .csel-trigger{
+    display:inline-flex;align-items:center;gap:8px;
+    background:var(--glass-strong);border:1px solid var(--glass-border);color:var(--ink);
+    font-family:'Inter',sans-serif;font-size:13px;padding:9px 14px;border-radius:999px;
+    -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+    cursor:pointer;white-space:nowrap;
+  }
+  .csel-trigger:hover{border-color:rgba(245,130,31,0.45);}
+  .csel-trigger.open{border-color:var(--orange);}
+  .csel-caret{font-size:9px;color:var(--muted);transition:transform .15s;}
+  .csel-trigger.open .csel-caret{transform:rotate(180deg);color:var(--orange-dark);}
+  .csel-menu{
+    position:absolute;top:calc(100% + 6px);left:0;min-width:180px;max-width:340px;
+    max-height:280px;overflow-y:auto;
+    background:var(--glass-strong);
+    -webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);
+    border:1px solid var(--glass-border);border-radius:14px;
+    box-shadow:0 16px 40px rgba(0,0,0,0.18);
+    padding:6px;z-index:80;display:none;
+  }
+  .csel-menu.open{display:block;}
+  .csel-item{
+    padding:9px 12px;border-radius:9px;font-size:13px;color:var(--ink);
+    cursor:pointer;white-space:nowrap;
+  }
+  .csel-item:hover{background:rgba(245,130,31,0.12);}
+  .csel-item.active{
+    background:linear-gradient(135deg,var(--orange),var(--orange-dark));
+    color:#fff;font-weight:600;
+  }
   .search{flex:1;min-width:160px;}
   .count-note{font-family:'Inter',sans-serif;font-size:12px;color:var(--muted);margin-left:auto;}
   .filter-label{font-family:'Inter',sans-serif;font-size:11.5px;color:var(--muted);margin-right:-4px;}
@@ -796,6 +836,85 @@ function dirLabel(direction){
   if(direction==='OUT') return 'Withdrawal';
   return direction || '—';
 }
+// ---- custom themed dropdown (replaces native <select> popup styling) ----
+function enhanceSelect(select){
+  if(select._cselRefresh){
+    select._cselRefresh();
+    return;
+  }
+  const wrapper = document.createElement('span');
+  wrapper.className = 'csel-wrap';
+  select.parentNode.insertBefore(wrapper, select);
+  wrapper.appendChild(select);
+  select.classList.add('csel-native');
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'csel-trigger';
+  const label = document.createElement('span');
+  label.className = 'csel-label';
+  const caret = document.createElement('span');
+  caret.className = 'csel-caret';
+  caret.textContent = '\u25BE';
+  trigger.appendChild(label);
+  trigger.appendChild(caret);
+
+  const menu = document.createElement('div');
+  menu.className = 'csel-menu';
+
+  wrapper.appendChild(trigger);
+  wrapper.appendChild(menu);
+
+  function closeMenu(){
+    menu.classList.remove('open');
+    trigger.classList.remove('open');
+    document.removeEventListener('click', onOutsideClick);
+  }
+  function openMenu(){
+    menu.classList.add('open');
+    trigger.classList.add('open');
+    document.addEventListener('click', onOutsideClick);
+  }
+  function onOutsideClick(e){
+    if(!wrapper.contains(e.target)) closeMenu();
+  }
+
+  function refresh(){
+    wrapper.style.display = (select.style.display === 'none') ? 'none' : 'inline-flex';
+    menu.innerHTML = '';
+    Array.from(select.options).forEach(opt=>{
+      const item = document.createElement('div');
+      item.className = 'csel-item' + (opt.value===select.value ? ' active' : '');
+      item.textContent = opt.textContent;
+      item.addEventListener('click', e=>{
+        e.stopPropagation();
+        if(select.value !== opt.value){
+          select.value = opt.value;
+          select.dispatchEvent(new Event('change', { bubbles:true }));
+        }
+        refresh();
+        closeMenu();
+      });
+      menu.appendChild(item);
+    });
+    const selOpt = select.options[select.selectedIndex];
+    label.textContent = selOpt ? selOpt.textContent : '';
+  }
+
+  trigger.addEventListener('click', e=>{
+    e.stopPropagation();
+    if(menu.classList.contains('open')) closeMenu();
+    else { refresh(); openMenu(); }
+  });
+
+  select._cselRefresh = refresh;
+  refresh();
+}
+
+function syncCustomSelects(){
+  document.querySelectorAll('select').forEach(enhanceSelect);
+}
+
 function presetToDateRange(preset){
   const pad = n => String(n).padStart(2,'0');
   const iso = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
@@ -849,6 +968,7 @@ async function loadHistory(){
     host.innerHTML = '<div class="empty">Statement history isn\'t available right now.</div>';
   }
   loadBatches();
+  syncCustomSelects();
 }
 
 function populateHistTypeFilter(){
@@ -965,6 +1085,7 @@ function renderHistoryList(){
       deleteStatement(btn.dataset.id, btn.dataset.name);
     });
   });
+  syncCustomSelects();
 }
 
 document.getElementById('histSearchBox').addEventListener('input', e=>{
@@ -1644,6 +1765,7 @@ function renderCounterpartyDetail(name){
     });
     if(th.dataset.k===state.detailSortKey) th.classList.add('sorted');
   });
+  syncCustomSelects();
 }
 
 function getFilteredAllTransactions(){
@@ -1832,6 +1954,7 @@ function render(){
     document.getElementById('exportPdfBtn').style.display = 'none';
     document.getElementById('mainControls').style.display = 'none';
     renderCounterpartyDetail(state.selected);
+    syncCustomSelects();
     return;
   }
   document.getElementById('tabBar').style.display='flex';
@@ -1853,6 +1976,7 @@ function render(){
   }
   if(state.tab==='counterparties') renderCounterpartyList();
   else renderAllTable();
+  syncCustomSelects();
 }
 
 // ---- bulk upload rendering ----
@@ -2106,6 +2230,7 @@ function renderBulk(){
   }
   if(bulkState.tab==='counterparties') renderBulkCounterpartyList();
   else renderBulkAllTransactions();
+  syncCustomSelects();
 }
 
 function renderBulkCounterpartyList(){
@@ -2221,6 +2346,7 @@ function renderBulkDetail(name){
 }
 
 showScreen('upload');
+syncCustomSelects();
 </script>
 </body>
 </html>
