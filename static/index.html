@@ -355,11 +355,67 @@
         <div class="heading" style="margin-bottom:0;">Previously analysed statements</div>
         <button class="upload-btn" id="newUploadBtn" style="padding:9px 20px;font-size:12.5px;">Upload new statement</button>
       </div>
+      <div class="controls" style="margin-top:0;">
+        <input class="search" type="text" id="histSearchBox" placeholder="Search filename or account…" />
+        <select id="histTypeFilter"><option value="">All account types</option></select>
+        <select id="histDateRangePreset">
+          <option value="">Any period</option>
+          <option value="today">Today</option>
+          <option value="this_week">This Week</option>
+          <option value="this_month">This Month</option>
+          <option value="mtd">Month to Date</option>
+          <option value="this_quarter">This Quarter</option>
+          <option value="qtd">Quarter to Date</option>
+          <option value="this_year">This Year</option>
+          <option value="ytd">Year to Date</option>
+          <option value="prev_day">Previous Day</option>
+          <option value="prev_week">Previous Week</option>
+          <option value="prev_month">Previous Month</option>
+          <option value="prev_quarter">Previous Quarter</option>
+          <option value="prev_year">Previous Year</option>
+          <option value="custom">Custom range…</option>
+        </select>
+        <input type="date" id="histDateFrom" style="display:none" />
+        <input type="date" id="histDateTo" style="display:none" />
+        <select id="histSort">
+          <option value="uploaded_desc">Newest uploaded first</option>
+          <option value="uploaded_asc">Oldest uploaded first</option>
+          <option value="period_desc">Period start (newest)</option>
+          <option value="period_asc">Period start (oldest)</option>
+        </select>
+        <span class="count-note" id="histCountNote"></span>
+      </div>
       <div id="historyList" class="table-card"><div class="empty">Loading…</div></div>
     </div>
 
     <div class="glass history-panel">
       <div class="heading">Bulk uploads</div>
+      <div class="controls" style="margin-top:0;">
+        <select id="batchDateRangePreset">
+          <option value="">Any upload date</option>
+          <option value="today">Today</option>
+          <option value="this_week">This Week</option>
+          <option value="this_month">This Month</option>
+          <option value="mtd">Month to Date</option>
+          <option value="this_quarter">This Quarter</option>
+          <option value="qtd">Quarter to Date</option>
+          <option value="this_year">This Year</option>
+          <option value="ytd">Year to Date</option>
+          <option value="prev_day">Previous Day</option>
+          <option value="prev_week">Previous Week</option>
+          <option value="prev_month">Previous Month</option>
+          <option value="prev_quarter">Previous Quarter</option>
+          <option value="prev_year">Previous Year</option>
+          <option value="custom">Custom range…</option>
+        </select>
+        <input type="date" id="batchDateFrom" style="display:none" />
+        <input type="date" id="batchDateTo" style="display:none" />
+        <select id="batchSort">
+          <option value="uploaded_desc">Newest uploaded first</option>
+          <option value="uploaded_asc">Oldest uploaded first</option>
+        </select>
+        <span class="count-note" id="batchCountNote"></span>
+      </div>
       <div id="batchList" class="table-card"><div class="empty">Loading…</div></div>
     </div>
   </div>
@@ -720,6 +776,12 @@ let bulkCounterparties = [];
 let bulkFilesList = [];
 let bulkState = { tab:'counterparties', search:'', category:'', amountMin:null, amountMax:null, dateFrom:null, dateTo:null, datePreset:'', sortKey:'activity', sortDir:-1, page:1, pageSize:50, selected:null };
 
+// ---- statement/batch history state ----
+let allStatements = [];
+let histState = { search:'', accountType:'', dateFrom:null, dateTo:null, datePreset:'', sortKey:'uploaded_desc' };
+let allBatches = [];
+let batchState = { dateFrom:null, dateTo:null, datePreset:'', sortKey:'uploaded_desc' };
+
 function fmtAmt(n){
   if(n===null||n===undefined) return '—';
   return '₹' + Math.round(n).toLocaleString('en-IN');
@@ -775,71 +837,171 @@ async function loadHistory(){
     const res = await fetch('/api/statements');
     const data = await res.json();
     if(!res.ok){
+      allStatements = [];
       host.innerHTML = '<div class="empty">Statement history isn\'t available right now.</div>';
     }else{
-      const rows = data.statements || [];
-      if(rows.length===0){
-        host.innerHTML = '<div class="empty">No statements analysed yet — upload one above.</div>';
-      }else{
-        const groups = new Map();
-        rows.forEach(r=>{
-          const key = r.account_type || 'Unclassified';
-          if(!groups.has(key)) groups.set(key, []);
-          groups.get(key).push(r);
-        });
-        const priority = ['Current', 'OD'];
-        const keys = Array.from(groups.keys()).sort((a,b)=>{
-          if(a==='Unclassified') return 1;
-          if(b==='Unclassified') return -1;
-          const pa = priority.indexOf(a), pb = priority.indexOf(b);
-          if(pa!==-1 && pb!==-1) return pa-pb;
-          if(pa!==-1) return -1;
-          if(pb!==-1) return 1;
-          return a.localeCompare(b);
-        });
-
-        let html = '';
-        keys.forEach((key, idx)=>{
-          const groupRows = groups.get(key);
-          const label = key==='OD' ? 'OD (Overdraft) Accounts' : (key==='Unclassified' ? 'Unclassified' : `${key} Accounts`);
-          html += `<div style="margin:${idx?'22px':'0'} 0 10px;padding:0 4px;font-family:'Poppins',sans-serif;font-weight:600;font-size:13.5px;color:var(--ink);">${escapeHtml(label)} <span style="color:var(--muted);font-weight:400;font-family:'Inter',sans-serif;">(${groupRows.length})</span></div>`;
-          html += `<table><thead><tr>
-            <th>File</th><th>Account</th><th>Period</th>
-            <th class="mono" style="text-align:right">Deposit</th>
-            <th class="mono" style="text-align:right">Withdrawal</th>
-            <th></th><th></th>
-          </tr></thead><tbody>`;
-          groupRows.forEach(r=>{
-            const acct = [r.account_name, r.account_no].filter(Boolean).join(' · ') || '—';
-            html += `<tr class="hist-row" data-id="${r.id}">
-              <td class="name">${escapeHtml(r.filename)}</td>
-              <td>${escapeHtml(acct)}</td>
-              <td class="mono">${fmtDate(r.period_start)} &ndash; ${fmtDate(r.period_end)}</td>
-              <td class="amt in">${fmtAmt(r.total_in)}</td>
-              <td class="amt out">${fmtAmt(r.total_out)}</td>
-              <td style="text-align:right;color:var(--orange-dark);font-weight:600;">View &rarr;</td>
-              <td style="text-align:right;"><button class="delete-btn" data-id="${r.id}" data-name="${escapeHtml(r.filename)}">Delete</button></td>
-            </tr>`;
-          });
-          html += '</tbody></table>';
-        });
-        host.innerHTML = html;
-        document.querySelectorAll('.hist-row').forEach(tr=>{
-          tr.addEventListener('click', ()=> openStatement(tr.dataset.id));
-        });
-        host.querySelectorAll('.delete-btn').forEach(btn=>{
-          btn.addEventListener('click', e=>{
-            e.stopPropagation();
-            deleteStatement(btn.dataset.id, btn.dataset.name);
-          });
-        });
-      }
+      allStatements = data.statements || [];
+      populateHistTypeFilter();
+      renderHistoryList();
     }
   }catch(err){
+    allStatements = [];
     host.innerHTML = '<div class="empty">Statement history isn\'t available right now.</div>';
   }
   loadBatches();
 }
+
+function populateHistTypeFilter(){
+  const sel = document.getElementById('histTypeFilter');
+  const current = sel.value;
+  const types = Array.from(new Set(allStatements.map(r => r.account_type || 'Unclassified')));
+  const priority = ['Current', 'OD'];
+  types.sort((a,b)=>{
+    if(a==='Unclassified') return 1;
+    if(b==='Unclassified') return -1;
+    const pa=priority.indexOf(a), pb=priority.indexOf(b);
+    if(pa!==-1 && pb!==-1) return pa-pb;
+    if(pa!==-1) return -1;
+    if(pb!==-1) return 1;
+    return a.localeCompare(b);
+  });
+  sel.innerHTML = '<option value="">All account types</option>' +
+    types.map(t=>`<option value="${escapeHtml(t)}">${escapeHtml(t==='OD' ? 'OD (Overdraft)' : t)}</option>`).join('');
+  sel.value = current;
+}
+
+function getFilteredStatements(){
+  let rows = allStatements.filter(r=>{
+    if(histState.search){
+      const s = histState.search;
+      const hay = `${r.filename} ${r.account_name||''} ${r.account_no||''}`.toLowerCase();
+      if(!hay.includes(s)) return false;
+    }
+    if(histState.accountType && (r.account_type || 'Unclassified') !== histState.accountType) return false;
+    if(histState.dateFrom || histState.dateTo){
+      const from = histState.dateFrom, to = histState.dateTo;
+      const ps = r.period_start, pe = r.period_end;
+      if(!ps || !pe) return false;
+      if(from && pe < from) return false;
+      if(to && ps > to) return false;
+    }
+    return true;
+  });
+  rows = [...rows].sort((a,b)=>{
+    switch(histState.sortKey){
+      case 'uploaded_asc': return (a.uploaded_at||'').localeCompare(b.uploaded_at||'');
+      case 'period_desc': return (b.period_start||'').localeCompare(a.period_start||'');
+      case 'period_asc': return (a.period_start||'').localeCompare(b.period_start||'');
+      default: return (b.uploaded_at||'').localeCompare(a.uploaded_at||'');
+    }
+  });
+  return rows;
+}
+
+function renderHistoryList(){
+  const host = document.getElementById('historyList');
+  if(allStatements.length===0){
+    host.innerHTML = '<div class="empty">No statements analysed yet — upload one above.</div>';
+    document.getElementById('histCountNote').textContent = '';
+    return;
+  }
+  const rows = getFilteredStatements();
+  document.getElementById('histCountNote').textContent = `${rows.length.toLocaleString('en-IN')} of ${allStatements.length.toLocaleString('en-IN')} statements`;
+
+  if(rows.length===0){
+    host.innerHTML = '<div class="empty">No statements match your filters.</div>';
+    return;
+  }
+
+  const groups = new Map();
+  rows.forEach(r=>{
+    const key = r.account_type || 'Unclassified';
+    if(!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  });
+  const priority = ['Current', 'OD'];
+  const keys = Array.from(groups.keys()).sort((a,b)=>{
+    if(a==='Unclassified') return 1;
+    if(b==='Unclassified') return -1;
+    const pa = priority.indexOf(a), pb = priority.indexOf(b);
+    if(pa!==-1 && pb!==-1) return pa-pb;
+    if(pa!==-1) return -1;
+    if(pb!==-1) return 1;
+    return a.localeCompare(b);
+  });
+
+  let html = '';
+  keys.forEach((key, idx)=>{
+    const groupRows = groups.get(key);
+    const label = key==='OD' ? 'OD (Overdraft) Accounts' : (key==='Unclassified' ? 'Unclassified' : `${key} Accounts`);
+    html += `<div style="margin:${idx?'22px':'0'} 0 10px;padding:0 4px;font-family:'Poppins',sans-serif;font-weight:600;font-size:13.5px;color:var(--ink);">${escapeHtml(label)} <span style="color:var(--muted);font-weight:400;font-family:'Inter',sans-serif;">(${groupRows.length})</span></div>`;
+    html += `<table><thead><tr>
+      <th>File</th><th>Account</th><th>Period</th>
+      <th class="mono" style="text-align:right">Deposit</th>
+      <th class="mono" style="text-align:right">Withdrawal</th>
+      <th></th><th></th>
+    </tr></thead><tbody>`;
+    groupRows.forEach(r=>{
+      const acct = [r.account_name, r.account_no].filter(Boolean).join(' · ') || '—';
+      html += `<tr class="hist-row" data-id="${r.id}">
+        <td class="name">${escapeHtml(r.filename)}</td>
+        <td>${escapeHtml(acct)}</td>
+        <td class="mono">${fmtDate(r.period_start)} &ndash; ${fmtDate(r.period_end)}</td>
+        <td class="amt in">${fmtAmt(r.total_in)}</td>
+        <td class="amt out">${fmtAmt(r.total_out)}</td>
+        <td style="text-align:right;color:var(--orange-dark);font-weight:600;">View &rarr;</td>
+        <td style="text-align:right;"><button class="delete-btn" data-id="${r.id}" data-name="${escapeHtml(r.filename)}">Delete</button></td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+  });
+  host.innerHTML = html;
+  document.querySelectorAll('.hist-row').forEach(tr=>{
+    tr.addEventListener('click', ()=> openStatement(tr.dataset.id));
+  });
+  host.querySelectorAll('.delete-btn').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      e.stopPropagation();
+      deleteStatement(btn.dataset.id, btn.dataset.name);
+    });
+  });
+}
+
+document.getElementById('histSearchBox').addEventListener('input', e=>{
+  histState.search = e.target.value.toLowerCase(); renderHistoryList();
+});
+document.getElementById('histTypeFilter').addEventListener('change', e=>{
+  histState.accountType = e.target.value; renderHistoryList();
+});
+document.getElementById('histSort').addEventListener('change', e=>{
+  histState.sortKey = e.target.value; renderHistoryList();
+});
+document.getElementById('histDateFrom').addEventListener('change', e=>{
+  histState.dateFrom = e.target.value || null; renderHistoryList();
+});
+document.getElementById('histDateTo').addEventListener('change', e=>{
+  histState.dateTo = e.target.value || null; renderHistoryList();
+});
+document.getElementById('histDateRangePreset').addEventListener('change', e=>{
+  const val = e.target.value;
+  histState.datePreset = val;
+  if(val === 'custom'){
+    document.getElementById('histDateFrom').style.display = 'inline-block';
+    document.getElementById('histDateTo').style.display = 'inline-block';
+  }else{
+    document.getElementById('histDateFrom').style.display = 'none';
+    document.getElementById('histDateTo').style.display = 'none';
+    if(val === ''){
+      histState.dateFrom = null; histState.dateTo = null;
+    }else{
+      const range = presetToDateRange(val);
+      histState.dateFrom = range.from; histState.dateTo = range.to;
+    }
+    document.getElementById('histDateFrom').value = histState.dateFrom || '';
+    document.getElementById('histDateTo').value = histState.dateTo || '';
+  }
+  renderHistoryList();
+});
 
 async function deleteStatement(id, filename){
   if(!confirm(`Delete "${filename}"? This removes it and its transactions permanently. This can't be undone.`)) return;
@@ -857,52 +1019,112 @@ async function deleteStatement(id, filename){
 }
 
 async function loadBatches(){
-  const host = document.getElementById('batchList');
-  host.innerHTML = '<div class="empty">Loading…</div>';
   try{
     const res = await fetch('/api/batches');
     const data = await res.json();
     if(!res.ok){
-      host.innerHTML = '<div class="empty">Bulk upload history isn\'t available right now.</div>';
+      allBatches = [];
+      document.getElementById('batchList').innerHTML = '<div class="empty">Bulk upload history isn\'t available right now.</div>';
       return;
     }
-    const rows = data.batches || [];
-    if(rows.length===0){
-      host.innerHTML = '<div class="empty">No bulk uploads yet — select multiple files above to analyse them together.</div>';
-      return;
-    }
-    let html = `<table><thead><tr>
-      <th>Uploaded</th><th class="mono">Files</th><th class="mono">Txns</th>
-      <th class="mono" style="text-align:right">Deposit</th>
-      <th class="mono" style="text-align:right">Withdrawal</th>
-      <th></th><th></th>
-    </tr></thead><tbody>`;
-    rows.forEach(r=>{
-      html += `<tr class="batch-row" data-id="${r.id}">
-        <td class="mono">${fmtDate((r.created_at||'').slice(0,10))}</td>
-        <td class="mono">${r.file_count}</td>
-        <td class="mono">${r.transaction_count!=null ? r.transaction_count.toLocaleString('en-IN') : '—'}</td>
-        <td class="amt in">${fmtAmt(r.total_in)}</td>
-        <td class="amt out">${fmtAmt(r.total_out)}</td>
-        <td style="text-align:right;color:var(--orange-dark);font-weight:600;">View &rarr;</td>
-        <td style="text-align:right;"><button class="delete-btn" data-id="${r.id}">Delete</button></td>
-      </tr>`;
-    });
-    html += '</tbody></table>';
-    host.innerHTML = html;
-    document.querySelectorAll('.batch-row').forEach(tr=>{
-      tr.addEventListener('click', ()=> openBatch(tr.dataset.id));
-    });
-    host.querySelectorAll('.delete-btn').forEach(btn=>{
-      btn.addEventListener('click', e=>{
-        e.stopPropagation();
-        deleteBatch(btn.dataset.id);
-      });
-    });
+    allBatches = data.batches || [];
+    renderBatchList();
   }catch(err){
-    host.innerHTML = '<div class="empty">Bulk upload history isn\'t available right now.</div>';
+    allBatches = [];
+    document.getElementById('batchList').innerHTML = '<div class="empty">Bulk upload history isn\'t available right now.</div>';
   }
 }
+
+function getFilteredBatches(){
+  let rows = allBatches.filter(r=>{
+    if(batchState.dateFrom || batchState.dateTo){
+      const day = (r.created_at||'').slice(0,10);
+      if(!day) return false;
+      if(batchState.dateFrom && day < batchState.dateFrom) return false;
+      if(batchState.dateTo && day > batchState.dateTo) return false;
+    }
+    return true;
+  });
+  rows = [...rows].sort((a,b)=>{
+    return batchState.sortKey==='uploaded_asc'
+      ? (a.created_at||'').localeCompare(b.created_at||'')
+      : (b.created_at||'').localeCompare(a.created_at||'');
+  });
+  return rows;
+}
+
+function renderBatchList(){
+  const host = document.getElementById('batchList');
+  if(allBatches.length===0){
+    host.innerHTML = '<div class="empty">No bulk uploads yet — select multiple files above to analyse them together.</div>';
+    document.getElementById('batchCountNote').textContent = '';
+    return;
+  }
+  const rows = getFilteredBatches();
+  document.getElementById('batchCountNote').textContent = `${rows.length.toLocaleString('en-IN')} of ${allBatches.length.toLocaleString('en-IN')} bulk uploads`;
+  if(rows.length===0){
+    host.innerHTML = '<div class="empty">No bulk uploads match your filters.</div>';
+    return;
+  }
+  let html = `<table><thead><tr>
+    <th>Uploaded</th><th class="mono">Files</th><th class="mono">Txns</th>
+    <th class="mono" style="text-align:right">Deposit</th>
+    <th class="mono" style="text-align:right">Withdrawal</th>
+    <th></th><th></th>
+  </tr></thead><tbody>`;
+  rows.forEach(r=>{
+    html += `<tr class="batch-row" data-id="${r.id}">
+      <td class="mono">${fmtDate((r.created_at||'').slice(0,10))}</td>
+      <td class="mono">${r.file_count}</td>
+      <td class="mono">${r.transaction_count!=null ? r.transaction_count.toLocaleString('en-IN') : '—'}</td>
+      <td class="amt in">${fmtAmt(r.total_in)}</td>
+      <td class="amt out">${fmtAmt(r.total_out)}</td>
+      <td style="text-align:right;color:var(--orange-dark);font-weight:600;">View &rarr;</td>
+      <td style="text-align:right;"><button class="delete-btn" data-id="${r.id}">Delete</button></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  host.innerHTML = html;
+  document.querySelectorAll('.batch-row').forEach(tr=>{
+    tr.addEventListener('click', ()=> openBatch(tr.dataset.id));
+  });
+  host.querySelectorAll('.delete-btn').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      e.stopPropagation();
+      deleteBatch(btn.dataset.id);
+    });
+  });
+}
+
+document.getElementById('batchSort').addEventListener('change', e=>{
+  batchState.sortKey = e.target.value; renderBatchList();
+});
+document.getElementById('batchDateFrom').addEventListener('change', e=>{
+  batchState.dateFrom = e.target.value || null; renderBatchList();
+});
+document.getElementById('batchDateTo').addEventListener('change', e=>{
+  batchState.dateTo = e.target.value || null; renderBatchList();
+});
+document.getElementById('batchDateRangePreset').addEventListener('change', e=>{
+  const val = e.target.value;
+  batchState.datePreset = val;
+  if(val === 'custom'){
+    document.getElementById('batchDateFrom').style.display = 'inline-block';
+    document.getElementById('batchDateTo').style.display = 'inline-block';
+  }else{
+    document.getElementById('batchDateFrom').style.display = 'none';
+    document.getElementById('batchDateTo').style.display = 'none';
+    if(val === ''){
+      batchState.dateFrom = null; batchState.dateTo = null;
+    }else{
+      const range = presetToDateRange(val);
+      batchState.dateFrom = range.from; batchState.dateTo = range.to;
+    }
+    document.getElementById('batchDateFrom').value = batchState.dateFrom || '';
+    document.getElementById('batchDateTo').value = batchState.dateTo || '';
+  }
+  renderBatchList();
+});
 
 async function deleteBatch(id){
   if(!confirm('Delete this bulk upload group? The individual files stay in your statement history — this only removes the combined grouping.')) return;
